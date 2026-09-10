@@ -33,7 +33,7 @@
     "populations": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kcEligible", "mbon11", "mbon01", "mbon02", "mbon03", "ppl101", "pam02", "pam01"],
+      "required": ["kcEligible", "mbon11", "mbon01", "mbon02", "mbon03", "ppl101", "pam15"],
       "properties": {
         "kcEligible": {"$ref": "#/$defs/selectedPopulation"},
         "mbon11": {"$ref": "#/$defs/typedPopulation"},
@@ -41,8 +41,7 @@
         "mbon02": {"$ref": "#/$defs/typedPopulation"},
         "mbon03": {"$ref": "#/$defs/typedPopulation"},
         "ppl101": {"$ref": "#/$defs/typedPopulation"},
-        "pam02": {"$ref": "#/$defs/typedPopulation"},
-        "pam01": {"$ref": "#/$defs/typedPopulation"}
+        "pam15": {"$ref": "#/$defs/typedPopulation"}
       }
     },
     "plasticEdges": {

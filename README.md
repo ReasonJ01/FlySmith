@@ -14,7 +14,9 @@ Machine-checkable contracts live in [`schemas/`](schemas/):
 - `experiment-config.schema.json` — immutable experiment configuration
 - `calibration.schema.json` — calibrated neural parameters and Gates A–F
 - `trial-record.schema.json` — per-option neural assay record
-- `bondsmith-adapter.schema.json` — local Bondsmith adapter wire types
+- `run-event.schema.json` — decision, teaching, and learning-reset records
+- `bondsmith-adapter.schema.json` — reusable JSON wire types
+- `bondsmith-adapter.openapi.yaml` — executable HTTP contract for the local Bondsmith adapter
 
 ## V1 architecture
 

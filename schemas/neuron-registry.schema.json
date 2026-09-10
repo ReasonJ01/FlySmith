@@ -58,6 +58,7 @@
     "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "bodyIds": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "integer", "minimum": 1}},
     "indices": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "integer", "minimum": 0}},
+    "rootSides": {"type": "array", "minItems": 1, "items": {"enum": ["L", "R"]}},
     "typedPopulation": {
       "type": "object",
       "additionalProperties": false,
@@ -71,11 +72,12 @@
     "selectedPopulation": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["selector", "bodyIds", "simulationIndices"],
+      "required": ["selector", "bodyIds", "simulationIndices", "rootSides"],
       "properties": {
         "selector": {"type": "string", "minLength": 1},
         "bodyIds": {"$ref": "#/$defs/bodyIds"},
-        "simulationIndices": {"$ref": "#/$defs/indices"}
+        "simulationIndices": {"$ref": "#/$defs/indices"},
+        "rootSides": {"$ref": "#/$defs/rootSides"}
       }
     },
     "plasticEdge": {

@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flysmith.local/schemas/calibration.schema.json",
+  "title": "FlySmith calibration manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "provenance", "kc", "mbon", "dan", "gates"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["graphSha256", "registrySha256", "experimentConfigSha256", "kernelSha256"],
+      "properties": {
+        "graphSha256": {"$ref": "#/$defs/sha256"},
+        "registrySha256": {"$ref": "#/$defs/sha256"},
+        "experimentConfigSha256": {"$ref": "#/$defs/sha256"},
+        "kernelSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "kc": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["current", "trialDurationMs"],
+      "properties": {
+        "current": {"type": "number", "exclusiveMinimum": 0},
+        "trialDurationMs": {"type": "integer", "minimum": 1}
+      }
+    },
+    "mbon": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mu11", "sigma11", "mu01", "sigma01"],
+      "properties": {
+        "mu11": {"type": "number"},
+        "sigma11": {"type": "number", "minimum": 0.5},
+        "mu01": {"type": "number"},
+        "sigma01": {"type": "number", "minimum": 0.5}
+      }
+    },
+    "dan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ppl101Current", "pam02Current"],
+      "properties": {
+        "ppl101Current": {"type": "number", "exclusiveMinimum": 0},
+        "pam02Current": {"type": "number", "exclusiveMinimum": 0}
+      }
+    },
+    "gates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["A", "B", "C", "D", "E", "F"],
+      "properties": {
+        "A": {"$ref": "#/$defs/gate"},
+        "B": {"$ref": "#/$defs/gate"},
+        "C": {"$ref": "#/$defs/gate"},
+        "D": {"$ref": "#/$defs/gate"},
+        "E": {"$ref": "#/$defs/gate"},
+        "F": {"$ref": "#/$defs/gate"}
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["passed", "metrics"],
+      "properties": {
+        "passed": {"type": "boolean"},
+        "metrics": {"type": "object", "additionalProperties": {"type": ["number", "integer", "boolean", "string"]}}
+      }
+    }
+  }
+}

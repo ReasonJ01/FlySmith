@@ -41,10 +41,10 @@
     "dan": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["ppl101Current", "pam02Current"],
+      "required": ["ppl101Current", "pam15Current"],
       "properties": {
         "ppl101Current": {"type": "number", "exclusiveMinimum": 0},
-        "pam02Current": {"type": "number", "exclusiveMinimum": 0}
+        "pam15Current": {"type": "number", "exclusiveMinimum": 0}
       }
     },
     "gates": {

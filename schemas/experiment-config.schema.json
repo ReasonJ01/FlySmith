@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flysmith.local/schemas/experiment-config.schema.json",
+  "title": "FlySmith experiment configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "experimentId", "maleCnsDataset", "simulator", "projection", "normalization", "decision", "learning", "reward", "scenario", "bondsmithAdapterBaseUrl"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "experimentId": {"type": "string", "minLength": 1},
+    "maleCnsDataset": {"const": "male-cns:v1.0"},
+    "simulator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["upstreamRepo", "upstreamCommit", "model", "dtMs"],
+      "properties": {
+        "upstreamRepo": {"const": "nftechie/doomfly"},
+        "upstreamCommit": {"const": "71ecf53d78eaffaf1a57ed7b0ccf5d458abc9f33"},
+        "model": {"const": "adaptive-centered-v6"},
+        "dtMs": {"const": 0.1}
+      }
+    },
+    "projection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["seed", "kcSparsity"],
+      "properties": {
+        "seed": {"type": "integer", "minimum": 0},
+        "kcSparsity": {"type": "number", "exclusiveMinimum": 0, "maximum": 0.25}
+      }
+    },
+    "normalization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["minRateBps", "maxRateBps", "maxLockDays"],
+      "properties": {
+        "minRateBps": {"type": "integer", "minimum": 0},
+        "maxRateBps": {"type": "integer", "minimum": 1},
+        "maxLockDays": {"type": "integer", "minimum": 1}
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trancheMinor", "indifferenceMarginZ"],
+      "properties": {
+        "trancheMinor": {"type": "integer", "minimum": 1},
+        "indifferenceMarginZ": {"type": "number", "minimum": 0}
+      }
+    },
+    "learning": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "eta", "efficacyFloor", "kcActivityReferenceHz", "danActivityReferenceHz", "conditioningRepeats"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "eta": {"type": "number", "minimum": 0},
+        "efficacyFloor": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+        "kcActivityReferenceHz": {"type": "number", "exclusiveMinimum": 0},
+        "danActivityReferenceHz": {"type": "number", "exclusiveMinimum": 0},
+        "conditioningRepeats": {"type": "integer", "minimum": 1}
+      }
+    },
+    "reward": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["interestReferenceFractionOfTranche"],
+      "properties": {
+        "interestReferenceFractionOfTranche": {"type": "number", "exclusiveMinimum": 0, "maximum": 1}
+      }
+    },
+    "scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["liquidityShocks"],
+      "properties": {
+        "liquidityShocks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["day", "requiredMinor"],
+            "properties": {
+              "day": {"type": "integer", "minimum": 1},
+              "requiredMinor": {"type": "integer", "minimum": 1}
+            }
+          }
+        }
+      }
+    },
+    "bondsmithAdapterBaseUrl": {"type": "string", "pattern": "^https?://"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"normalization": {"properties": {"minRateBps": {"type": "integer"}, "maxRateBps": {"type": "integer"}}}}},
+      "then": {}
+    }
+  ]
+}

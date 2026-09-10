@@ -1,127 +1,362 @@
-# FlySmith plan
+# FlySmith v1 — Normative Experiment Specification
 
-## Goal
+**Status:** implementation specification. The v1 design choices in this document are frozen. There are no open biological I/O or learning-design questions required to start implementation.
 
-FlySmith will connect a local Bondsmith-compatible savings environment to a simulated MaleCNS fly connectome and use the fly's neural activity to choose between savings actions.
+FlySmith is a local experiment that places the `male-cns:v1.0` Drosophila connectome inside a short-horizon savings environment modeled on Bondsmith. No real money is used. Time advances only when the operator advances a simulated day.
 
-The experiment is deliberately closed-loop and local:
+The scientific question is narrow:
 
-1. The local Bondsmith state defines the options available on a simulated day.
-2. FlySmith converts those options into stimulation of selected MaleCNS input neurons.
-3. The fly simulation propagates that activity through the connectome.
-4. FlySmith reads a small, predefined set of descending-neuron outputs.
-5. A deterministic decoder converts those outputs into one local savings action.
-6. The user manually advances the simulated day.
-7. When outcomes resolve, a teaching signal can modify a restricted set of synaptic efficacies inside the simulated mushroom-body circuit.
+> Can a fixed MaleCNS connectome, augmented only with localized dopamine-gated mushroom-body plasticity, learn useful preferences over synthetic financial-state cues from realized consequences?
 
-No real money is involved.
+The experiment does **not** claim that a fly understands money, that connectome synapse counts are physiological weights, or that the resulting agent is a financial optimiser.
+
+See [REFERENCES.md](REFERENCES.md) for the evidence behind the choices below.
 
 ---
 
-## Design principles
+## 1. Frozen v1 choices
 
-- **Explicit neural I/O.** Every financial feature must resolve to a documented set of neuron IDs and an exact stimulation rule.
-- **Minimal decoder.** The fly should choose; ordinary code should only translate neural output into a valid environment action.
-- **Fixed environment semantics.** Bondsmith provides the account/product vocabulary and local API surface. FlySmith controls the experimental clock.
-- **Reproducible trials.** Identical environment state + random seed + neural state must reproduce a trial.
-- **Separate choice from learning.** A choice trial should not silently mutate weights. Learning occurs only during an explicit teaching phase.
-- **Keep most of MaleCNS fixed.** V1 learning changes only a biologically motivated subset of existing synapses, not the topology of the connectome.
-- **Treat biological mappings as hypotheses.** Input populations, output populations, and plasticity rules must be versioned and testable.
+| Component | v1 decision |
+|---|---|
+| Connectome | Janelia `male-cns:v1.0` |
+| Neural dynamics | Whole-graph LIF, Shiu-style / Xenova-compatible external Poisson drive |
+| Synthetic cue neurons | `KCg-m` + `KCg-d` gamma Kenyon cells |
+| Cue construction | Deterministic sparse distributed 4-D code; nearest 5% of eligible gamma KCs |
+| Cue drive | 100 Hz external Poisson drive for 500 ms |
+| Readout | `MBON11` approach channel minus `MBON01` avoidance channel |
+| Reward DAN | `PAM01` / PAM-gamma5 |
+| Punishment DAN | `PPL101` / PPL1-gamma1pedc |
+| Plastic edges | Existing gamma-KC -> `MBON01` and gamma-KC -> `MBON11` edges only |
+| Plasticity | Compartment-specific dopamine-gated depression; topology unchanged |
+| Delayed credit | Replay the original allocation cue when its consequence resolves |
+| Choice | Evaluate each feasible option independently; choose highest normalized MB valence |
+| Allocation size | Fixed by environment, not neurons: 10% of initial assets per tranche, capped by liquid cash/capacity |
+| Clock | Manual simulated days only |
+| Real money | Never |
+
+The previous proposal to encode two options as left/right sensory populations and read left/right descending turn neurons is removed from v1. It introduced a motor-side convention unrelated to associative value and made learning harder to localize.
 
 ---
 
-# 1. System boundary
+## 2. System boundary
 
 ```text
-local Bondsmith-compatible API
+Local Bondsmith-compatible world
+          |
+          | WorldState
+          v
+Financial feature encoder
+          |
+          | x = [yield, lock, postLiquidity, postConcentration]
+          v
+Deterministic synthetic gamma-KC cue
+          |
+          | external Poisson rates[neuronCount]
+          v
+Whole MaleCNS LIF simulation
+          |
+          | per-neuron spike counts
+          v
+MBON valence decoder
+          |
+          | scalar candidate score
+          v
+Candidate selector
+          |
+          | HOLD or ALLOCATE(productId, tranche)
+          v
+Local savings world
+          |
+          | realized outcomes on later simulated days
+          v
+Conditioning replay + DAN teaching signal
           |
           v
-     EnvironmentState
-          |
-          v
-        encoder
-          |
-          v
-  external neural drive
-          |
-          v
-   MaleCNS simulation
-          |
-          v
-    neural readouts
-          |
-          v
-        decoder
-          |
-          v
-       FlyAction
-          |
-          v
- local Bondsmith action
+Localized KC->MBON efficacy update
 ```
 
-The fly model never receives JSON, pounds, product names, or API objects. It receives only stimulation of selected neurons.
-
-The Bondsmith layer never receives spikes. It receives only a small action object emitted by the decoder.
+The fly never receives JSON, currency symbols, provider names, product IDs, or a hand-computed utility score. The financial layer never receives arbitrary spikes; it receives one decoded action.
 
 ---
 
-# 2. Environment state
+## 3. MaleCNS identity and neuron registry
 
-A simulated day should expose only the information available to the fly at decision time.
+Pin the biological data source to **Janelia MaleCNS `male-cns:v1.0`**. The peer-reviewed 2026 Cell resource contains about 166.7k neurons spanning brain and VNC. Do not use neuron counts copied from third-party game demos as dataset truth.
 
-Initial state shape:
+All source data must retain the canonical neuPrint `bodyId`. Build a one-time registry mapping:
 
 ```ts
-interface EnvironmentState {
-  day: number;
-  cash: number;
-  totalAssets: number;
-  products: ProductState[];
-}
-
-interface ProductState {
-  id: string;
-  rate: number;
-  termDays: number;
-  balance: number;
-  available: boolean;
+interface NeuronRef {
+  bodyId: number;
+  type: string;
+  simulationIndex: number;
 }
 ```
 
-The first version should use short products measured in days, not realistic month/year durations.
+The simulator may use dense array indices internally, but experiment configuration and logs must always identify biological neurons by `bodyId` and `type` as well.
 
-The environment owns:
+### 3.1 Cue population
 
-- cash balances
-- product balances
-- term countdowns
-- maturities
-- interest/reward accrual
-- product availability
-- scheduled rate changes
-- optional liquidity requirements
-- manual `advance day`
+Resolve all MaleCNS neurons of type:
 
-The neural model owns none of these rules.
+```text
+KCg-m
+KCg-d
+```
+
+The MaleCNS Cell Type Explorer currently reports approximately 1,340 `KCg-m` and 206 `KCg-d` neurons. These gamma Kenyon cells are the synthetic conditioned-stimulus substrate.
+
+Construct the **eligible cue pool** as gamma KCs that have at least one retained structural edge to **both** the MBON01 pair and the MBON11 pair. This guarantees that every cue neuron has an anatomical route into both opponent valence channels.
+
+Initialization MUST fail if the resulting eligible pool contains fewer than 512 cells. Do not silently substitute another KC class.
+
+### 3.2 Readout neurons
+
+Use these exact MaleCNS cell types and body IDs:
+
+```text
+APPROACH / positive-action channel
+MBON11 = MBON-gamma1pedc>alpha/beta
+bodyIds: 10704, 11402
+
+AVOIDANCE / negative-action channel
+MBON01 = MBON-gamma5beta'2a
+bodyIds: 520151, 10013
+```
+
+The decoder operates on both hemispheres together; there is no artificial left/right financial meaning.
+
+### 3.3 Teaching neurons
+
+Use:
+
+```text
+POSITIVE REINFORCEMENT
+PAM01 = PAM-gamma5
+resolve all PAM01 cells dynamically from male-cns:v1.0
+(current MaleCNS explorer: 44 cells total)
+
+NEGATIVE REINFORCEMENT
+PPL101 = PPL1-gamma1pedc
+bodyIds: 11327, 11900
+```
+
+Do not hard-code the PAM01 body-ID list. Resolve type membership from the pinned dataset and save the resolved registry/hash with each experiment.
+
+Biological rationale: PAM-gamma5 innervates the gamma5 compartment containing MBON01; rewarding reinforcement can reduce conditioned KC drive to avoidance-output channels. PPL1-gamma1pedc provides aversive teaching in the gamma1 compartment and aversive reinforcement depresses KC->MBON11 drive. MBON11 is an approach-favoring output; MBON01 is an avoidance-favoring output.
 
 ---
 
-# 3. Decision format: pairwise choice
+## 4. Financial observation
 
-V1 should avoid asking the network to choose directly among an arbitrary number of products.
+Every feasible candidate is reduced to exactly four observable state variables in `[0,1]`:
 
-Instead, every neural trial compares exactly two alternatives:
-
-```text
-LEFT OPTION  vs  RIGHT OPTION
+```ts
+interface OptionFeatures {
+  yield: number;
+  lock: number;
+  postLiquidity: number;
+  postConcentration: number;
+}
 ```
 
-Cash is itself a valid option.
+Definitions:
 
-For N available alternatives, FlySmith can run pairwise trials and aggregate the results into a daily winner. The aggregation rule must be deterministic and logged.
+```text
+yield = effectiveDailyRate / configuredMaxDailyRate
 
-Example action space:
+lock = daysUntilFundsAccessible / configuredMaxLockDays
+
+postLiquidity = liquidCashAfterThisAllocation / totalAssets
+
+postConcentration = balanceInThisDestinationAfterAllocation / totalAssets
+```
+
+Clamp each value to `[0,1]`. All normalization bounds are fixed in experiment configuration before Day 0 and never recomputed from that day's available products.
+
+If the local Bondsmith-compatible world exposes AER rather than a daily rate, the adapter converts it to an effective daily rate:
+
+```text
+effectiveDailyRate = (1 + AER)^(1/365) - 1
+```
+
+The short simulated term changes access/maturity timing; it does not require inventing a different interest formula unless the local world deliberately defines one.
+
+### Cash / hold cue
+
+`CASH` is a candidate state:
+
+```text
+yield             = hubDailyRate / configuredMaxDailyRate
+lock              = 0
+postLiquidity      = currentLiquidCash / totalAssets
+postConcentration  = currentLiquidCash / totalAssets
+```
+
+For the initial synthetic world, `hubDailyRate = 0`.
+
+### What is deliberately absent
+
+V1 does not encode provider name, bank identity, FSCS status, marketing labels, previous choice, product rank, future product changes, or an externally calculated expected utility. If a variable is not in the four numbers above, the fly does not know it.
+
+---
+
+## 5. Financial vector -> synthetic neural cue
+
+Finance has no natural fly sensory mapping. V1 therefore uses the mushroom body's known ability to associate arbitrary sparse KC ensembles with reinforcement, rather than pretending that rates are odors or that term length is taste.
+
+### 5.1 Deterministic 4-D receptive fields
+
+For every eligible gamma KC `i`, derive a deterministic pseudo-random preferred financial vector:
+
+```text
+mu_i = [u1, u2, u3, u4], each u in [0,1]
+```
+
+using a reproducible cryptographic hash of:
+
+```text
+"FlySmith:v1" + bodyId
+```
+
+The mapping MUST be independent of product IDs and experiment outcomes.
+
+For candidate vector `x`, compute Euclidean distance:
+
+```text
+d_i = ||x - mu_i||_2
+```
+
+Select exactly the closest **5%** of eligible gamma KCs, rounding to the nearest whole neuron with a minimum of 1.
+
+This creates a sparse distributed cue in which nearby financial states share more KCs than distant states. That gives the model a defined route for stimulus generalization without a learned encoder outside the fly.
+
+### 5.2 External drive
+
+During a candidate presentation:
+
+```text
+selected cue KCs: 100 Hz external Poisson drive
+all other external inputs: 0 Hz
+```
+
+V1 does not encode feature magnitude in firing-rate amplitude. Feature values determine **which** KCs participate in the sparse pattern.
+
+100 Hz is chosen because whole-brain Drosophila LIF work commonly probes sensory drive over roughly 10-200 Hz and explicitly treats absolute rates as model quantities rather than physiological reconstructions.
+
+---
+
+## 6. Candidate trial protocol
+
+Evaluate candidates **one at a time**, never simultaneously.
+
+For each candidate:
+
+1. Reset fast neural state: membrane voltage, synaptic current, refractory state, delay buffers and spike counters.
+2. Preserve all learned plastic multipliers.
+3. Reset external drive to zero.
+4. Run 100 ms with zero external cue drive.
+5. Apply the candidate's 5% gamma-KC cue at 100 Hz for 500 ms.
+6. Record per-neuron spikes.
+7. Decode the MBON output over the final 400 ms of the cue window, excluding the first 100 ms as an onset/transmission transient.
+8. Repeat for **5 independent Poisson seeds**.
+9. Candidate output is the median of the 5 replicate valence scores.
+
+Random seeds are deterministic:
+
+```text
+seed = hash(experimentSeed, day, candidateId, replicateIndex, phase)
+```
+
+If the underlying simulator cannot be seeded, deterministic RNG is an implementation prerequisite.
+
+Resetting fast state between candidates prevents candidate ordering from becoming an unintended input. Learned synaptic efficacy is the only memory that persists between candidate trials.
+
+---
+
+## 7. MBON valence decoder
+
+For each replicate, compute mean firing rate of each bilateral pair during the 400 ms read window:
+
+```text
+A = mean Hz of MBON11 [10704, 11402]
+V = mean Hz of MBON01 [520151, 10013]
+```
+
+Do not subtract raw Hz directly. Different cell types can have different native gains.
+
+### 7.1 Naive-brain calibration
+
+Before any learning:
+
+1. Generate 256 deterministic feature vectors uniformly over `[0,1]^4`.
+2. Present them using the normal trial protocol with plastic multipliers fixed at `1.0`.
+3. Measure the MBON11 and MBON01 distributions.
+4. Freeze robust baseline statistics:
+
+```text
+mA = median(A)
+sA = 1.4826 * MAD(A) + epsilon
+mV = median(V)
+sV = 1.4826 * MAD(V) + epsilon
+```
+
+Then:
+
+```text
+zA = (A - mA) / sA
+zV = (V - mV) / sV
+valenceScore = zA - zV
+```
+
+The calibration remains frozen after learning. Otherwise normalization would erase the memory-induced shift we are trying to measure.
+
+### 7.2 Noise threshold
+
+Use 64 deterministic cue states. For each state, independently compute two 5-replicate median scores. Define:
+
+```text
+theta = 95th percentile of abs(scoreSet1 - scoreSet2)
+```
+
+This is the empirically measured neural-choice noise band.
+
+### 7.3 Daily selection
+
+Evaluate `CASH` and every feasible product. Sort by candidate median valence score.
+
+```text
+if topScore - secondScore >= theta:
+    choose top candidate
+else:
+    HOLD
+```
+
+If `CASH` is the confident winner, `HOLD`.
+
+No pairwise tournament is used in v1.
+
+---
+
+## 8. Neural choice -> savings action
+
+The neurons choose **destination only**.
+
+At experiment start:
+
+```text
+baseTranche = 10% of initial total assets
+```
+
+For a product winner:
+
+```text
+amount = min(baseTranche, currentLiquidCash, productRemainingCapacity)
+```
+
+Exclude a product candidate before neural evaluation if `amount` cannot satisfy its minimum deposit or any other local-world feasibility rule.
+
+Action type:
 
 ```ts
 type FlyAction =
@@ -129,561 +364,532 @@ type FlyAction =
   | { type: "allocate"; productId: string; amount: number };
 ```
 
-Allocation amount should initially be external and fixed, for example a configurable tranche or fixed percentage of available cash. Neural activity should choose the destination before it is allowed to control position size.
+V1 has no neural withdrawal action. Fixed/notice positions resolve according to the environment's own rules and maturities return to hub cash.
 
 ---
 
-# 4. Financial observation -> neural input
+## 9. Teaching protocol
 
-## 4.1 Initial observable features
+Learning occurs only from **realized consequences**. Product appearance, advertised rate changes and counterfactual missed opportunities are observations, not reinforcement.
 
-Each option is represented by a small numerical feature vector.
+### 9.1 Outcome ledger
 
-V1:
-
-```text
-rate
-term
-post-action liquidity
-post-action exposure
-```
-
-These are observations, not precomputed utility scores.
-
-For example, `term = 1.0` means "at the high end of the configured term range". It does not mean good or bad.
-
-Each feature is normalized using experiment-wide bounds that are fixed before a run:
+Every allocation stores:
 
 ```ts
-interface OptionFeatures {
-  rate: number;       // 0..1
-  term: number;       // 0..1
-  liquidity: number;  // 0..1
-  exposure: number;   // 0..1
-}
-```
-
-## 4.2 Neural codebook
-
-Each feature gets a fixed bilateral input codebook:
-
-```text
-RATE_L        RATE_R
-TERM_L        TERM_R
-LIQUIDITY_L   LIQUIDITY_R
-EXPOSURE_L    EXPOSURE_R
-```
-
-Each entry is a set of resolved MaleCNS simulation indices.
-
-```ts
-interface NeuralPopulation {
-  bodyIds: number[];
-  simulationIndices: number[];
-}
-
-interface InputCodebook {
-  rate:      { left: NeuralPopulation; right: NeuralPopulation };
-  term:      { left: NeuralPopulation; right: NeuralPopulation };
-  liquidity: { left: NeuralPopulation; right: NeuralPopulation };
-  exposure:  { left: NeuralPopulation; right: NeuralPopulation };
-}
-```
-
-The exact biological cell types are **not yet fixed**. Selecting and validating these populations is a prerequisite for claiming that the experiment uses meaningful sensory pathways rather than arbitrary neuron buckets.
-
-Requirements for candidate input populations:
-
-- clear left/right homologues
-- upstream of the chosen decision/output pathway
-- large enough for robust stimulation
-- not themselves part of the motor output decoder
-- stable annotation/body-ID resolution in MaleCNS
-- no overlap between feature channels unless intentionally designed
-
-A likely direction is to use projection/sensory populations capable of driving mushroom-body and downstream decision circuitry, but this must be verified from connectivity rather than assumed.
-
-## 4.3 Numeric value -> stimulation
-
-The encoder produces the full external-drive vector expected by the simulator.
-
-Conceptually:
-
-```ts
-externalHz = new Float32Array(NEURON_COUNT);
-```
-
-All neurons default to zero external drive.
-
-For a simple rate code:
-
-```ts
-hz = baselineHz + featureValue * featureRangeHz;
-```
-
-Every simulation index belonging to that feature/side receives that external drive for the trial.
-
-Initial calibration values such as `0..200 Hz` should be configuration, not constants baked into the experiment. The range must be calibrated so that inputs propagate without simply saturating the network.
-
-Population coding can replace scalar rate coding later if generalisation across unseen rates/terms is poor.
-
----
-
-# 5. Passing the input through MaleCNS
-
-A choice trial is:
-
-```text
-1. reset or restore the agreed pre-trial neural state
-2. encode LEFT features into LEFT neural populations
-3. encode RIGHT features into RIGHT neural populations
-4. run the LIF/connectome simulation for a fixed duration
-5. collect spike counts for every neuron
-6. extract only the registered output populations
-```
-
-The simulation duration is configurable. A starting value such as 500-1000 ms can be tested, but it must be chosen from calibration data rather than treated as biologically meaningful by default.
-
-Every trial log should include:
-
-```ts
-interface TrialRecord {
-  experimentId: string;
+interface AllocationMemory {
+  allocationId: string;
   day: number;
-  seed: number;
-  leftOptionId: string;
-  rightOptionId: string;
-  leftFeatures: OptionFeatures;
-  rightFeatures: OptionFeatures;
-  stimulusConfigVersion: string;
-  neuralConfigVersion: string;
-  plasticityStateVersion?: string;
-  durationMs: number;
-  output: NeuralDecisionOutput;
+  productId: string;
+  amount: number;
+  originalFeatures: OptionFeatures;
+  originalCueBodyIds: number[];
 }
 ```
 
----
+This exact cue can be replayed later.
 
-# 6. Neural output -> choice
+### 9.2 Positive outcome
 
-V1 should use a native bilateral motor readout rather than assigning financial semantics to an unrelated neuron such as P1.
-
-Initial candidate output channels:
+When interest is actually credited for an allocation, principal return contributes zero reward.
 
 ```text
-TURN_LEFT
-TURN_RIGHT
+positiveCashOutcome = interestCredited
 ```
 
-Candidate descending-neuron types include the left/right turning populations used by existing MaleCNS demonstration simulators, but FlySmith must resolve and verify the exact body IDs and simulation indices before freezing the codebook.
-
-For each population:
-
-```ts
-populationHz = totalSpikes / neuronCount / trialSeconds;
-```
-
-Then:
-
-```ts
-preference = leftHz - rightHz;
-```
-
-Decoder:
-
-```ts
-if (preference > threshold) return LEFT;
-if (preference < -threshold) return RIGHT;
-return NO_PREFERENCE;
-```
-
-The threshold is a calibrated experimental parameter.
-
-```ts
-interface NeuralDecisionOutput {
-  leftHz: number;
-  rightHz: number;
-  preferenceHz: number;
-  winner: "left" | "right" | "none";
-}
-```
-
-The raw population rates and preference must always be retained; never store only the decoded winner.
-
----
-
-# 7. Pairwise choice -> local Bondsmith action
-
-Given alternatives:
+Normalize the event relative to the experiment's expected maximum per-tranche return:
 
 ```text
-cash
-product A
-product B
-product C
+positiveScale = baseTranche * configuredMaxDailyRate * configuredMaxLockDays
+r = tanh(positiveCashOutcome / positiveScale)
 ```
 
-run all configured pairwise trials. Each produces `left`, `right`, or `none`.
+`r` is in `(0,1]`.
 
-V1 aggregation can be a simple tournament/Copeland score:
+### 9.3 Negative liquidity outcome
+
+If the environment generates a liquidity requirement and available cash cannot meet it:
 
 ```text
-win  = +1
-loss =  0
-tie  = +0.5
+shortfall = requiredCash - availableCash
 ```
 
-Highest score wins. Ties use a deterministic rule defined in configuration.
-
-Translation:
+Distribute the negative event over currently inaccessible allocations in proportion to their locked principal:
 
 ```text
-cash wins       -> HOLD
-product X wins  -> ALLOCATE fixed tranche to X
+blame_i = lockedPrincipal_i / totalLockedPrincipal
+negativeScale = baseTranche
+r_i = -tanh((shortfall * blame_i) / negativeScale)
 ```
 
-The decoder does not decide whether an API call is financially clever. It only translates the fly's winner into an action supported by the local environment.
+Replay and punish each implicated allocation cue separately.
+
+This is the fixed v1 delayed-credit rule. It is intentionally explicit and auditable; there is no hidden portfolio optimiser assigning counterfactual value.
+
+### 9.4 Cue replay
+
+When an outcome resolves, reconstruct the **original** 5% KC cue used at allocation time. Do not recalculate the cue from the product's current terms.
+
+Conditioning trial:
+
+```text
+100 ms reset/zero-drive
+500 ms original cue drive
+500 ms teacher drive concurrently with the cue
+```
+
+Positive event:
+
+```text
+cue + PAM01
+```
+
+Negative event:
+
+```text
+cue + PPL101
+```
+
+Teacher external drive:
+
+```text
+teacherDriveHz = 100 * abs(r)
+```
+
+with a maximum of 100 Hz.
+
+The teaching population must actually spike. Plasticity is gated by measured DAN activity, not merely by the environment's reward number.
 
 ---
 
-# 8. Manual day loop
+## 10. Plasticity rule
+
+Do not train the whole 166k-neuron graph.
+
+### 10.1 Plastic edge set
+
+Only existing structural edges in these two sets can change efficacy:
+
+```text
+eligible gamma KC -> MBON01 [520151, 10013]
+eligible gamma KC -> MBON11 [10704, 11402]
+```
+
+No new edge is created. No edge is deleted. Structural connectome weight remains immutable.
+
+For each plastic edge:
+
+```text
+w_effective = w_structural * p
+p_initial = 1.0
+p_min = 0.2
+p_max = 1.0
+```
+
+### 10.2 Teacher-specific direction
+
+During **positive** conditioning, PAM01 gates depression of active cue KC -> MBON01 (avoidance-channel) synapses.
+
+During **negative** conditioning, PPL101 gates depression of active cue KC -> MBON11 (approach-channel) synapses.
+
+There is no potentiation and no passive decay in v1. Reversal is achieved by learning in the opponent channel.
+
+### 10.3 Local update
+
+For each selected cue KC `i`, let:
+
+```text
+a_i = min(1, KC_spikes_i / median_spikes_of_selected_cue_KCs)
+```
+
+For the appropriate teacher population, calibrate `teacherReferenceHz` as the median measured DAN firing produced by a 100 Hz teacher-drive-only trial. During conditioning:
+
+```text
+d = min(1, measuredTeacherHz / teacherReferenceHz)
+```
+
+Then for every eligible structural edge from KC `i` to the teacher's target MBON pair:
+
+```text
+p_new = clamp(p_old - eta * a_i * d, 0.2, 1.0)
+eta = 0.02
+```
+
+If the teacher population does not spike, `d = 0` and memory does not change.
+
+### 10.4 Critical isolation rule
+
+**Plasticity updates are disabled during all ordinary candidate/choice trials.**
+
+Endogenous or accidentally evoked PAM/PPL activity is logged, but it cannot alter weights outside an explicit conditioning phase. This is required because existing MaleCNS game-learning experiments have observed teacher contamination: broad input can recruit DANs without providing a clean causal teaching event.
+
+The DAN stimulus therefore has two roles during conditioning:
+
+1. it participates in the simulated neural state as a real identified neuron population;
+2. its measured spikes gate the explicit localized plasticity rule.
+
+The model does not pretend that the base LIF implementation natively simulates dopamine-dependent biochemical plasticity.
+
+---
+
+## 11. Manual day loop
 
 ```text
 DAY N
   |
-  +-- query local Bondsmith state
-  |
-  +-- derive currently valid alternatives
-  |
-  +-- build feature vectors
-  |
-  +-- run neural choice trials
-  |
-  +-- decode daily winner
-  |
-  +-- apply one local action
-  |
-  +-- log everything
-  |
+  +-- snapshot local savings state
+  +-- generate feasible CASH/product candidates
+  +-- calculate each candidate's four features
+  +-- generate deterministic 5% gamma-KC cue
+  +-- run five neural replicates per candidate
+  +-- decode MBON valence
+  +-- choose winner or HOLD via theta
+  +-- apply at most one allocation tranche
+  +-- persist action + neural evidence
   `-- stop
 
-USER: advance day
+OPERATOR ADVANCES DAY
   |
-  +-- accrue daily reward / interest
-  +-- decrement terms
-  +-- process maturities
-  +-- apply scheduled environment changes
-  +-- resolve any outcomes eligible for teaching
-  `-- DAY N+1
+  +-- accrue interest
+  +-- decrement access/maturity timers
+  +-- process maturities and interest credits
+  +-- process optional liquidity requirement
+  +-- emit resolved positive/negative outcomes
+  +-- replay each responsible historical cue
+  +-- apply explicit PAM01/PPL101 conditioning
+  +-- persist plasticity diff
+  `-- expose DAY N+1
 ```
 
-Nothing should advance on wall-clock time.
+Nothing advances because wall-clock time passed.
 
 ---
 
-# 9. Teaching the fly
+## 12. Local Bondsmith boundary
 
-## 9.1 Scope
+Bondsmith's public developer site describes a REST Savings API, while Bondsmith's product model centers a hub account plus easy-access, notice and fixed-term deposits. FlySmith should copy those **domain semantics**, while the local experimental world is free to compress access periods to days.
 
-Do **not** train all MaleCNS weights.
-
-V1 learning keeps:
-
-- neuron topology fixed
-- most synaptic efficacies fixed
-- decoder fixed
-- financial encoder fixed during a run
-
-Only a restricted, biologically motivated set of mushroom-body synapses is plastic.
-
-Primary candidate:
-
-```text
-Kenyon cell (KC) -> mushroom body output neuron (MBON)
-```
-
-The exact set must be derived from MaleCNS annotations/connectivity and versioned.
-
-## 9.2 Weight representation
-
-Preserve the structural connectome weight separately from learned efficacy:
+Do not invent undocumented Bondsmith endpoint paths in neural code. Implement a narrow adapter:
 
 ```ts
-interface PlasticSynapse {
-  structuralWeight: number;
-  multiplier: number;
-}
-
-effectiveWeight = structuralWeight * multiplier;
-```
-
-Learning changes `multiplier`, not topology or structural synapse count.
-
-This distinction is required so that a learned fly can always be reset to the original connectome.
-
-## 9.3 Teaching signal
-
-When the consequence of a previous action resolves, the environment emits a scalar outcome:
-
-```ts
-reward: number // normalized e.g. -1..+1
-```
-
-That outcome is translated into stimulation of registered dopamine-neuron populations.
-
-Conceptual codebook:
-
-```text
-positive reinforcement -> reward-associated DAN population
-negative reinforcement -> punishment-associated DAN population
-```
-
-PAM/PPL1 systems are candidates, but the exact compartments and direction of plasticity must be selected from a specific published learning model before implementation.
-
-## 9.4 V1 credit assignment
-
-Short terms make delayed credit assignment manageable.
-
-Use **cue replay** first rather than inventing a multi-day eligibility trace:
-
-```text
-choice on day N
-    |
-    v
-outcome resolves on day N+k
-    |
-    +-- reconstruct/replay the chosen option's neural cue
-    +-- stimulate the appropriate DAN teaching population
-    `-- apply the plasticity update to eligible KC->MBON synapses
-```
-
-This creates an explicit conditioning event and keeps the first plasticity implementation inspectable.
-
-Later, replace or compare cue replay with a decaying eligibility trace:
-
-```text
-eligibility(t) = eligibility(0) * exp(-t / tau)
-```
-
-and dopamine-gated weight updates.
-
-## 9.5 Plasticity rule
-
-Do not invent the final sign/timing rule ad hoc.
-
-Implementation sequence:
-
-1. pick one published compartment-level Drosophila KC->MBON dopamine-gated learning rule
-2. map its required KC, MBON and DAN populations onto MaleCNS IDs
-3. reproduce a simple conditioning sanity test independent of finance
-4. only then expose the rule to Bondsmith outcomes
-
-The code should support a generic interface:
-
-```ts
-interface PlasticityRule {
-  onDecisionActivity(activity: NeuralActivity): void;
-  onTeachingSignal(signal: TeachingSignal): WeightUpdate[];
-  reset(): void;
-  snapshot(): PlasticitySnapshot;
+interface SavingsWorld {
+  snapshot(): Promise<WorldState>;
+  allocate(productId: string, amount: number): Promise<ActionResult>;
+  advanceDay(): Promise<DayResult>;
 }
 ```
+
+Everything downstream of `SavingsWorld` must run against both:
+
+- an in-memory deterministic test world; and
+- the local Bondsmith-compatible stack.
+
+The neural experiment should not care which transport is underneath.
 
 ---
 
-# 10. Bondsmith adapter
+## 13. Validation gates — mandatory before closed-loop savings runs
 
-Keep Bondsmith-specific transport outside the neural code.
+The biggest lesson from existing whole-connectome game experiments is that changing weights is not evidence of learning. FlySmith MUST pass the following isolated tests first.
+
+### Gate 1 — registry integrity
+
+- all pinned body IDs exist in `male-cns:v1.0`;
+- simulation index mapping is one-to-one;
+- PAM01/PPL101/MBON01/MBON11 type membership matches the registry;
+- eligible KC pool >= 512;
+- every eligible KC has retained edges to both readout types.
+
+### Gate 2 — cue integrity
+
+For 100 random feature vectors:
+
+- exactly 5% of eligible KCs receive external cue drive;
+- same vector + same config yields identical body-ID set;
+- similar feature vectors have greater cue overlap than distant vectors;
+- no non-cue neuron gets external cue drive.
+
+### Gate 3 — cue propagation
+
+Across 20 Poisson seeds:
+
+- candidate cues evoke measurable MBON01 and/or MBON11 activity above no-drive baseline;
+- the full graph does not enter runaway global firing;
+- output is not saturated at the firing ceiling.
+
+### Gate 4 — teacher integrity
+
+100 Hz teacher-only trials must produce reliable spikes in the intended DAN population and no numerical instability.
+
+Cue-only PAM01/PPL101 activity is measured as a contamination diagnostic. It does not update weights because ordinary-trial plasticity is disabled.
+
+### Gate 5 — positive conditioning unit test
+
+Pick one fixed cue A. Measure its naive valence. Repeatedly pair cue A with PAM01 using the exact conditioning protocol. Re-test with learning disabled during test.
+
+Expected result:
+
+```text
+valence_after > valence_before
+```
+
+### Gate 6 — negative conditioning unit test
+
+Pick cue B. Pair it with PPL101.
+
+Expected result:
+
+```text
+valence_after < valence_before
+```
+
+### Gate 7 — discrimination
+
+Reward A and punish B with otherwise identical exposure counts.
+
+Expected:
+
+```text
+score(A) - score(B) > theta
+```
+
+### Gate 8 — generalization
+
+After conditioning A, create `nearA` and `farA` in feature space without conditioning them.
+
+The absolute learned score transfer to `nearA` must exceed transfer to `farA` in the expected direction.
+
+### Gate 9 — reversal
+
+After A has been positively conditioned and B negatively conditioned, reverse the reinforcement schedules. The ordering must eventually reverse without resetting weights.
+
+### Gate 10 — controls
+
+Repeat conditioning with:
+
+- plasticity frozen;
+- teacher population silenced;
+- shuffled mapping from cue KCs to plastic-edge multipliers while preserving edge-count/weight distributions.
+
+The learned discrimination must disappear or materially weaken.
+
+### Statistical acceptance rule
+
+For Gates 5-9, use 20 independent experiment seeds. A gate passes only if:
+
+- at least **18/20** seeds change in the predicted direction; and
+- the median effect magnitude exceeds the precomputed neural noise threshold `theta` where applicable.
+
+**Do not connect learning to the savings loop until Gates 1-7 pass.** Gates 8-10 may be developed immediately afterward but are required before making a learning claim.
+
+---
+
+## 14. Whole-experiment controls and benchmarks
+
+Run identical predetermined market histories against:
+
+1. MaleCNS + v1 plasticity;
+2. same MaleCNS with plasticity frozen;
+3. same MaleCNS after learned multipliers are reset to 1.0;
+4. teacher-silent condition;
+5. shuffled gamma-KC plastic-edge assignment control;
+6. random destination policy;
+7. CASH-only policy;
+8. greedy highest-current-yield policy;
+9. deterministic horizon-aware oracle that knows the future, used only as an upper-bound benchmark.
+
+The oracle must never provide features or reinforcement to the fly.
+
+Primary metrics:
+
+```text
+cumulative realized interest
+liquidity shortfall / penalty
+fraction of assets liquid
+allocation concentration
+allocation switching rate
+MBON valence trajectory per cue
+plastic multiplier distribution
+learned cue discrimination
+```
+
+Scientific success does not require beating the greedy or oracle policies.
+
+---
+
+## 15. Logging and reproducibility
+
+Every run must persist:
+
+```text
+experiment ID and git commit
+MaleCNS dataset ID and source hashes
+annotation/edge file hashes
+bodyId <-> simulationIndex registry hash
+LIF parameter set
+RNG implementation and master seed
+feature normalization bounds
+KC receptive-field seed/version
+eligible KC body IDs
+cue body IDs for every candidate
+all external drive vectors in sparse form
+all candidate replicate spike counts for registered readouts
+DAN activity during choices and conditioning
+naive MBON calibration stats
+noise threshold theta
+decoded scores/actions
+world snapshots and realized outcomes
+all conditioning events
+all plastic edge diffs/checkpoints
+```
+
+JSONL is the canonical event log. Human-readable reports are derived artifacts.
+
+A checkpoint must include world state, RNG state, all plastic multipliers and experiment configuration. Fast neural state does not need to persist between manually separated candidate trials because the protocol deliberately resets it.
+
+---
+
+## 16. Implementation layout
+
+Suggested modules:
 
 ```text
 src/
   bondsmith/
-    client.*
-    mapper.*
+    adapter.*
+    types.*
 
   environment/
-    state.*
+    world.*
     clock.*
     outcomes.*
 
   fly/
-    simulator.*
-    neuron-registry.*
-    encoder.*
-    decoder.*
+    connectome.*
+    registry.*
+    lif.*
+    cues.*
+    trial.*
+    mbon-decoder.*
     plasticity.*
+    conditioning.*
 
   experiment/
-    pairwise.*
+    calibration.*
+    validation.*
     day-loop.*
     logging.*
+    checkpoint.*
+
+config/
+  v1.json
+
+tests/
+  registry.*
+  cues.*
+  decoder.*
+  conditioning.*
+  controls.*
 ```
 
-The adapter should expose a narrow interface regardless of the exact local Bondsmith API:
+---
 
-```ts
-interface SavingsEnvironment {
-  getState(): Promise<EnvironmentState>;
-  allocate(productId: string, amount: number): Promise<void>;
-  advanceDay(): Promise<ResolvedOutcome[]>;
-}
-```
+## 17. Build order
 
-This allows a fully in-memory environment to be used in tests before the Bondsmith integration is complete.
+### M0 — data and simulator
+
+- pin `male-cns:v1.0` data sources and hashes;
+- load the full retained graph;
+- reproduce the chosen LIF baseline;
+- provide deterministic RNG and arbitrary per-neuron external Poisson drive;
+- emit per-neuron spike counts.
+
+**Exit:** deterministic stimulation replay works.
+
+### M1 — biological registry
+
+- resolve `KCg-m`, `KCg-d`, MBON01, MBON11, PAM01, PPL101;
+- build bodyId/index map;
+- build eligible gamma-KC intersection;
+- run Gate 1.
+
+**Exit:** registry is frozen and hashable.
+
+### M2 — cue and readout assay
+
+- implement 4-D feature normalization;
+- deterministic KC receptive fields;
+- 5% cue generation;
+- 500 ms presentation protocol;
+- MBON calibration and `theta`;
+- run Gates 2-4.
+
+**Exit:** arbitrary financial-state vectors produce stable, reproducible valence measurements.
+
+### M3 — isolated learning
+
+- add plastic multipliers only to selected gamma-KC->MBON edges;
+- implement PAM01/PPL101 conditioning and measured-DAN gate;
+- implement plasticity snapshots;
+- run Gates 5-10.
+
+**Exit:** associative conditioning works without any financial world.
+
+### M4 — deterministic savings world
+
+- implement cash, 1-10 day products, rates, capacity, maturity, interest credit and liquidity requirements;
+- implement 10%-initial-assets tranche rule;
+- implement outcome ledger and cue replay;
+- run scripted market histories.
+
+**Exit:** complete manual day loop works in memory.
+
+### M5 — local Bondsmith adapter
+
+- map the local stack's actual product/account/deposit operations into `SavingsWorld`;
+- keep manual time in the experimental environment;
+- verify no real-money endpoint/configuration can be reached.
+
+**Exit:** the same M4 tests pass through the local adapter.
+
+### M6 — experiment suite
+
+- frozen/static/shuffled/teacher-silent controls;
+- deterministic market corpus;
+- lesions after training;
+- reports and plots.
+
+**Exit:** results are reproducible from config + seed + checkpoint.
 
 ---
 
-# 11. Required experiment logging
+## 18. Success and failure criteria
 
-Every run must preserve enough state to replay it:
+A successful FlySmith v1 demonstrates all of the following:
 
-```text
-experiment configuration
-MaleCNS dataset/version
-neuron codebook version
-input normalization bounds
-stimulus Hz calibration
-trial duration
-random seed(s)
-financial state for each day
-all pairwise neural readouts
-decoded actions
-all environmental outcomes
-all teaching events
-plasticity snapshots / diffs
-```
+1. synthetic financial vectors produce reproducible sparse gamma-KC representations;
+2. those representations propagate through the retained MaleCNS graph to the selected MBONs;
+3. explicit PAM01/PPL101 reinforcement changes only the permitted existing KC->MBON efficacies;
+4. conditioning changes subsequent MBON valence for the reinforced cue;
+5. nearby unseen financial states generalize more than distant states;
+6. opponent reinforcement can reverse learned preference;
+7. frozen/teacher-silent/shuffled controls do not show the same effect;
+8. learned valence changes the destination selected in the local savings environment.
 
-Outputs should support both machine-readable JSONL and a compact human-readable report.
+V1 has failed scientifically if weights change but cue valence and action selection do not change reproducibly. In that case the failure is retained and reported; the decoder or validation threshold must not be retuned against the desired financial outcome.
 
----
+The defensible result statement is:
 
-# 12. Baselines and controls
+> A MaleCNS-based associative agent learned preferences in a local short-horizon savings task under an explicitly specified gamma-KC/MBON dopamine-plasticity augmentation.
 
-Before interpreting learned behaviour, run the same environment against:
+It is not:
 
-1. intact fixed MaleCNS
-2. intact plastic MaleCNS before training
-3. trained plastic MaleCNS
-4. trained fly with plastic weights reset
-5. selected neural lesion(s)
-6. shuffled/randomised connectivity control where feasible
-7. trivial non-neural policies such as random choice and highest-rate choice
-
-The objective is not to prove that a fly is a good savings optimiser. The objective is to determine what behaviour emerges from the connectome, how experience changes it, and which circuits are responsible for those changes.
+> A fruit fly understands savings or optimizes a bank account.
 
 ---
 
-# 13. First calibration experiment
+## 19. Frozen-v1 rule
 
-Before calling Bondsmith at all:
+Implementation discoveries may reveal bugs, dataset mismatches or failed scientific gates. Those are reasons to fail a gate and version a v2 hypothesis, not reasons to silently change v1 until it works.
 
-1. Resolve one candidate bilateral input population.
-2. Resolve the left/right descending output populations.
-3. Stimulate only the left input at several Hz levels.
-4. Stimulate only the right input at the same levels.
-5. Measure left/right output activity over multiple seeds.
-6. Confirm that the system produces a stable, non-saturated bilateral bias.
-7. Repeat for every candidate feature channel.
-8. Test simultaneous channels for interference.
-
-If this does not work, no financial-layer work can rescue the experiment. The neural I/O must be established first.
-
----
-
-# 14. Milestones
-
-## M0 - Pin dependencies
-
-- choose MaleCNS dataset release
-- choose/reference the LIF simulator implementation
-- import neuron metadata and body-ID -> simulation-index mapping
-- record versions in config
-
-## M1 - Neural registry
-
-- query candidate bilateral input populations
-- query candidate output populations
-- save codebook with body IDs and simulation indices
-- validate no unintended overlap
-
-**Exit:** one documented input population can reproducibly bias a documented output population.
-
-## M2 - Pairwise neural assay
-
-- implement feature normalization
-- implement left/right stimulation encoder
-- fixed-duration trial runner
-- output population firing-rate decoder
-- deterministic seeding
-- trial logging
-
-**Exit:** arbitrary two-option feature vectors produce repeatable raw neural readouts and a left/right/no-preference result.
-
-## M3 - Local environment
-
-- implement cash and short-term products
-- fixed tranche allocation
-- maturity and reward accrual
-- manual day advancement
-- deterministic scenarios
-
-**Exit:** environment can run end-to-end without Bondsmith.
-
-## M4 - Bondsmith adapter
-
-- map local Bondsmith product/account objects into `EnvironmentState`
-- map `FlyAction` into local allocation calls
-- keep manual time under FlySmith control
-
-**Exit:** `advance day -> neural decision -> local Bondsmith action` works end-to-end.
-
-## M5 - Fixed-connectome experiments
-
-- predefined 10-30 day scenarios
-- rate/product changes
-- optional liquidity requirements
-- intact vs lesion/control runs
-
-**Exit:** complete replayable experimental logs and baseline plots.
-
-## M6 - Plastic mushroom body
-
-- select published plasticity rule
-- implement structural weight + learned multiplier
-- resolve KC/MBON/DAN populations
-- reproduce non-financial conditioning sanity test
-- implement cue-replay teaching
-- persist/reset learning state
-
-**Exit:** identical stimulus can produce a measurably different neural choice after conditioning, and resetting plasticity removes that acquired change.
-
-## M7 - Learned financial environment
-
-- map resolved financial outcomes to teaching signals
-- train across repeated short-term product decisions
-- evaluate generalisation to unseen product combinations
-- lesion trained circuitry
-- compare against controls
-
-**Exit:** quantify what is learned, where the memory is stored, and how circuit perturbations alter learned savings behaviour.
-
----
-
-# 15. Immediate next task
-
-Do not start with Bondsmith endpoints.
-
-The first implementation task is to establish the **neural I/O codebook**:
-
-```text
-financial feature
-    -> exact MaleCNS body IDs
-    -> exact simulator indices
-    -> stimulation strength/duration
-    -> whole-connectome propagation
-    -> exact output body IDs
-    -> measured left/right firing-rate bias
-```
-
-Once that assay is calibrated, the Bondsmith adapter is ordinary application plumbing around a defined experimental core.
+For v1, the neurons, cue code, timing, decoder, reward rule, plasticity rule, tranche rule and acceptance criteria above are fixed.

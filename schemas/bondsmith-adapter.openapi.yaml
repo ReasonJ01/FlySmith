@@ -1,0 +1,216 @@
+openapi: 3.1.0
+info:
+  title: FlySmith local Bondsmith adapter
+  version: 1.0.0
+  description: Loopback-only V1 contract between FlySmith and a local Bondsmith-compatible environment.
+servers:
+  - url: http://127.0.0.1:8088
+paths:
+  /flysmith/v1/state:
+    get:
+      operationId: getFlySmithState
+      responses:
+        '200':
+          description: Current decision state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/State'
+  /flysmith/v1/actions:
+    post:
+      operationId: applyFlySmithAction
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ActionRequest'
+      responses:
+        '200':
+          description: Action accepted or idempotently replayed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionResponse'
+        '409':
+          description: expectedStateVersion is stale; no mutation occurred.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Invalid action or product constraint violation; no mutation occurred.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /flysmith/v1/advance:
+    post:
+      operationId: advanceFlySmithDay
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdvanceRequest'
+      responses:
+        '200':
+          description: Environment advanced exactly one simulated day, or idempotently replayed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdvanceResponse'
+        '409':
+          description: expectedStateVersion is stale; no mutation occurred.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Invalid advance request; no mutation occurred.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+components:
+  schemas:
+    State:
+      type: object
+      additionalProperties: false
+      required: [day, currency, cashBalanceMinor, totalAssetsMinor, products, stateVersion]
+      properties:
+        day: { type: integer, minimum: 0 }
+        currency: { type: string, pattern: '^[A-Z]{3}$' }
+        cashBalanceMinor: { type: integer, minimum: 0 }
+        totalAssetsMinor: { type: integer, minimum: 0 }
+        stateVersion: { type: string, minLength: 1 }
+        products:
+          type: array
+          items: { $ref: '#/components/schemas/Product' }
+    Product:
+      type: object
+      additionalProperties: false
+      required: [productId, annualRateBps, effectiveLockDays, balanceMinor, minDepositMinor, maxDepositMinor, canDeposit]
+      properties:
+        productId: { type: string, minLength: 1 }
+        annualRateBps: { type: integer, minimum: 0 }
+        effectiveLockDays: { type: integer, minimum: 0 }
+        balanceMinor: { type: integer, minimum: 0 }
+        minDepositMinor: { type: integer, minimum: 0 }
+        maxDepositMinor:
+          oneOf:
+            - { type: integer, minimum: 0 }
+            - { type: 'null' }
+        canDeposit: { type: boolean }
+    ActionRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, expectedStateVersion, action]
+      properties:
+        requestId: { type: string, format: uuid }
+        expectedStateVersion: { type: string, minLength: 1 }
+        action:
+          oneOf:
+            - $ref: '#/components/schemas/HoldAction'
+            - $ref: '#/components/schemas/AllocateAction'
+    HoldAction:
+      type: object
+      additionalProperties: false
+      required: [type]
+      properties:
+        type: { const: hold }
+    AllocateAction:
+      type: object
+      additionalProperties: false
+      required: [type, productId, amountMinor]
+      properties:
+        type: { const: allocate }
+        productId: { type: string, minLength: 1 }
+        amountMinor: { type: integer, minimum: 1 }
+    ActionResponse:
+      type: object
+      additionalProperties: false
+      required: [requestId, accepted, allocationId, newStateVersion]
+      properties:
+        requestId: { type: string, format: uuid }
+        accepted: { const: true }
+        allocationId:
+          oneOf:
+            - { type: string, minLength: 1 }
+            - { type: 'null' }
+        newStateVersion: { type: string, minLength: 1 }
+    AdvanceRequest:
+      type: object
+      additionalProperties: false
+      required: [requestId, days, expectedStateVersion]
+      properties:
+        requestId: { type: string, format: uuid }
+        days: { const: 1 }
+        expectedStateVersion: { type: string, minLength: 1 }
+    AdvanceResponse:
+      type: object
+      additionalProperties: false
+      required: [day, newStateVersion, events]
+      properties:
+        day: { type: integer, minimum: 1 }
+        newStateVersion: { type: string, minLength: 1 }
+        events:
+          type: array
+          items:
+            oneOf:
+              - $ref: '#/components/schemas/MaturityEvent'
+              - $ref: '#/components/schemas/WithdrawalEvent'
+              - $ref: '#/components/schemas/RateChangeEvent'
+              - $ref: '#/components/schemas/ProductOpenedEvent'
+              - $ref: '#/components/schemas/ProductClosedEvent'
+    MaturityEvent:
+      type: object
+      additionalProperties: false
+      required: [type, allocationId, principalMinor, interestCreditedMinor]
+      properties:
+        type: { const: maturity }
+        allocationId: { type: string, minLength: 1 }
+        principalMinor: { type: integer, minimum: 0 }
+        interestCreditedMinor: { type: integer, minimum: 0 }
+    WithdrawalEvent:
+      type: object
+      additionalProperties: false
+      required: [type, allocationId, principalMinor, interestCreditedMinor]
+      properties:
+        type: { const: withdrawal }
+        allocationId: { type: string, minLength: 1 }
+        principalMinor: { type: integer, minimum: 0 }
+        interestCreditedMinor: { type: integer, minimum: 0 }
+    RateChangeEvent:
+      type: object
+      additionalProperties: false
+      required: [type, productId, annualRateBps]
+      properties:
+        type: { const: rate_change }
+        productId: { type: string, minLength: 1 }
+        annualRateBps: { type: integer, minimum: 0 }
+    ProductOpenedEvent:
+      type: object
+      additionalProperties: false
+      required: [type, productId]
+      properties:
+        type: { const: product_opened }
+        productId: { type: string, minLength: 1 }
+    ProductClosedEvent:
+      type: object
+      additionalProperties: false
+      required: [type, productId]
+      properties:
+        type: { const: product_closed }
+        productId: { type: string, minLength: 1 }
+    Error:
+      type: object
+      additionalProperties: false
+      required: [errorCode, message]
+      properties:
+        errorCode: { type: string, minLength: 1 }
+        message: { type: string, minLength: 1 }
+        currentStateVersion:
+          oneOf:
+            - { type: string, minLength: 1 }
+            - { type: 'null' }

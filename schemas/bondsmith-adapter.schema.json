@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flysmith.local/schemas/bondsmith-adapter.schema.json",
+  "title": "FlySmith Bondsmith adapter wire types",
+  "$defs": {
+    "state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["day", "currency", "cashBalanceMinor", "totalAssetsMinor", "products", "stateVersion"],
+      "properties": {
+        "day": {"type": "integer", "minimum": 0},
+        "currency": {"type": "string", "pattern": "^[A-Z]{3}$"},
+        "cashBalanceMinor": {"type": "integer", "minimum": 0},
+        "totalAssetsMinor": {"type": "integer", "minimum": 0},
+        "stateVersion": {"type": "string", "minLength": 1},
+        "products": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["productId", "annualRateBps", "effectiveLockDays", "balanceMinor", "minDepositMinor", "maxDepositMinor", "canDeposit"],
+            "properties": {
+              "productId": {"type": "string", "minLength": 1},
+              "annualRateBps": {"type": "integer", "minimum": 0},
+              "effectiveLockDays": {"type": "integer", "minimum": 0},
+              "balanceMinor": {"type": "integer", "minimum": 0},
+              "minDepositMinor": {"type": "integer", "minimum": 0},
+              "maxDepositMinor": {"type": ["integer", "null"], "minimum": 0},
+              "canDeposit": {"type": "boolean"}
+            }
+          }
+        }
+      }
+    },
+    "actionRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requestId", "expectedStateVersion", "action"],
+      "properties": {
+        "requestId": {"type": "string", "format": "uuid"},
+        "expectedStateVersion": {"type": "string", "minLength": 1},
+        "action": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["type"],
+              "properties": {"type": {"const": "hold"}}
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["type", "productId", "amountMinor"],
+              "properties": {
+                "type": {"const": "allocate"},
+                "productId": {"type": "string", "minLength": 1},
+                "amountMinor": {"type": "integer", "minimum": 1}
+              }
+            }
+          ]
+        }
+      }
+    },
+    "actionResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requestId", "accepted", "allocationId", "newStateVersion"],
+      "properties": {
+        "requestId": {"type": "string", "format": "uuid"},
+        "accepted": {"type": "boolean"},
+        "allocationId": {"type": ["string", "null"]},
+        "newStateVersion": {"type": "string", "minLength": 1},
+        "errorCode": {"type": ["string", "null"]}
+      }
+    },
+    "advanceRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requestId", "days", "expectedStateVersion"],
+      "properties": {
+        "requestId": {"type": "string", "format": "uuid"},
+        "days": {"const": 1},
+        "expectedStateVersion": {"type": "string", "minLength": 1}
+      }
+    },
+    "advanceResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["day", "newStateVersion", "events"],
+      "properties": {
+        "day": {"type": "integer", "minimum": 1},
+        "newStateVersion": {"type": "string", "minLength": 1},
+        "events": {"type": "array", "items": {"$ref": "#/$defs/event"}}
+      }
+    },
+    "event": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "allocationId", "principalMinor", "interestCreditedMinor"],
+          "properties": {
+            "type": {"const": "maturity"},
+            "allocationId": {"type": "string", "minLength": 1},
+            "principalMinor": {"type": "integer", "minimum": 0},
+            "interestCreditedMinor": {"type": "integer", "minimum": 0}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "allocationId", "principalMinor", "interestCreditedMinor"],
+          "properties": {
+            "type": {"const": "withdrawal"},
+            "allocationId": {"type": "string", "minLength": 1},
+            "principalMinor": {"type": "integer", "minimum": 0},
+            "interestCreditedMinor": {"type": "integer", "minimum": 0}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "productId", "annualRateBps"],
+          "properties": {
+            "type": {"const": "rate_change"},
+            "productId": {"type": "string", "minLength": 1},
+            "annualRateBps": {"type": "integer", "minimum": 0}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "productId"],
+          "properties": {
+            "type": {"enum": ["product_opened", "product_closed"]},
+            "productId": {"type": "string", "minLength": 1}
+          }
+        }
+      ]
+    }
+  }
+}

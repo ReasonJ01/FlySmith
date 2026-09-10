@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flysmith.local/schemas/trial-record.schema.json",
+  "title": "FlySmith option trial record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "experimentId", "runId", "day", "stateVersion", "optionId", "features", "cue", "blankRatesHz", "optionRatesHz", "deltaRatesHz", "score", "hashes"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "experimentId": {"type": "string", "minLength": 1},
+    "runId": {"type": "string", "minLength": 1},
+    "day": {"type": "integer", "minimum": 0},
+    "stateVersion": {"type": "string", "minLength": 1},
+    "optionId": {"type": "string", "minLength": 1},
+    "features": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["yield", "lock", "liquidity", "exposure"],
+      "properties": {
+        "yield": {"type": "number", "minimum": 0, "maximum": 1},
+        "lock": {"type": "number", "minimum": 0, "maximum": 1},
+        "liquidity": {"type": "number", "minimum": 0, "maximum": 1},
+        "exposure": {"type": "number", "minimum": 0, "maximum": 1}
+      }
+    },
+    "cue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sha256", "simulationIndices"],
+      "properties": {
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "simulationIndices": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "integer", "minimum": 0}}
+      }
+    },
+    "blankRatesHz": {"$ref": "#/$defs/rates"},
+    "optionRatesHz": {"$ref": "#/$defs/rates"},
+    "deltaRatesHz": {"$ref": "#/$defs/rates"},
+    "score": {"type": "number"},
+    "hashes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["registry", "graph", "calibration", "plasticityBefore", "plasticityAfter"],
+      "properties": {
+        "registry": {"$ref": "#/$defs/sha256"},
+        "graph": {"$ref": "#/$defs/sha256"},
+        "calibration": {"$ref": "#/$defs/sha256"},
+        "plasticityBefore": {"$ref": "#/$defs/sha256"},
+        "plasticityAfter": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "rates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mbon11", "mbon01", "mbon02", "mbon03"],
+      "properties": {
+        "mbon11": {"type": "number"},
+        "mbon01": {"type": "number"},
+        "mbon02": {"type": "number"},
+        "mbon03": {"type": "number"}
+      }
+    }
+  }
+}

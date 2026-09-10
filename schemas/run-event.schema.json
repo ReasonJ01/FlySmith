@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flysmith.local/schemas/run-event.schema.json",
+  "title": "FlySmith run event",
+  "oneOf": [
+    {"$ref": "#/$defs/decision"},
+    {"$ref": "#/$defs/teaching"},
+    {"$ref": "#/$defs/learningReset"}
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "features": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["yield", "lock", "liquidity", "exposure"],
+      "properties": {
+        "yield": {"type": "number", "minimum": 0, "maximum": 1},
+        "lock": {"type": "number", "minimum": 0, "maximum": 1},
+        "liquidity": {"type": "number", "minimum": 0, "maximum": 1},
+        "exposure": {"type": "number", "minimum": 0, "maximum": 1}
+      }
+    },
+    "option": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["optionId", "features", "cueHash", "score"],
+      "properties": {
+        "optionId": {"type": "string", "minLength": 1},
+        "features": {"$ref": "#/$defs/features"},
+        "cueHash": {"$ref": "#/$defs/sha256"},
+        "score": {"type": "number"}
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "type", "experimentId", "runId", "day", "stateVersion", "options", "cashScore", "selected", "reason", "requestId", "newStateVersion"],
+      "properties": {
+        "schemaVersion": {"const": 1},
+        "type": {"const": "decision"},
+        "experimentId": {"type": "string", "minLength": 1},
+        "runId": {"type": "string", "minLength": 1},
+        "day": {"type": "integer", "minimum": 0},
+        "stateVersion": {"type": "string", "minLength": 1},
+        "options": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/option"}},
+        "cashScore": {"type": "number"},
+        "selected": {
+          "oneOf": [
+            {"type": "object", "additionalProperties": false, "required": ["type"], "properties": {"type": {"const": "hold"}}},
+            {"type": "object", "additionalProperties": false, "required": ["type", "productId", "amountMinor", "allocationId"], "properties": {"type": {"const": "allocate"}, "productId": {"type": "string", "minLength": 1}, "amountMinor": {"type": "integer", "minimum": 1}, "allocationId": {"type": "string", "minLength": 1}}}
+          ]
+        },
+        "reason": {"enum": ["cash_won", "inside_indifference_margin", "product_won", "no_valid_product"]},
+        "requestId": {"type": "string", "format": "uuid"},
+        "newStateVersion": {"type": "string", "minLength": 1}
+      }
+    },
+    "teaching": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "type", "experimentId", "runId", "day", "allocationId", "cueHash", "cueIndices", "outcome", "teachingMagnitude", "teacher", "teacherRateHz", "changedEdgeCount", "plasticityBefore", "plasticityAfter"],
+      "properties": {
+        "schemaVersion": {"const": 1},
+        "type": {"const": "teaching"},
+        "experimentId": {"type": "string", "minLength": 1},
+        "runId": {"type": "string", "minLength": 1},
+        "day": {"type": "integer", "minimum": 0},
+        "allocationId": {"type": "string", "minLength": 1},
+        "cueHash": {"$ref": "#/$defs/sha256"},
+        "cueIndices": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "integer", "minimum": 0}},
+        "outcome": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["interestReward", "liquidityPenalty", "total"],
+          "properties": {
+            "interestReward": {"type": "number", "minimum": 0, "maximum": 1},
+            "liquidityPenalty": {"type": "number", "minimum": -1, "maximum": 0},
+            "total": {"type": "number", "minimum": -1, "maximum": 1}
+          }
+        },
+        "teachingMagnitude": {"type": "number", "minimum": 0, "maximum": 1},
+        "teacher": {"enum": ["PAM15", "PPL101"]},
+        "teacherRateHz": {"type": "number", "minimum": 0},
+        "changedEdgeCount": {"type": "integer", "minimum": 0},
+        "plasticityBefore": {"$ref": "#/$defs/sha256"},
+        "plasticityAfter": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "learningReset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "type", "experimentId", "runId", "day", "plasticityBefore", "plasticityAfter"],
+      "properties": {
+        "schemaVersion": {"const": 1},
+        "type": {"const": "learning_reset"},
+        "experimentId": {"type": "string", "minLength": 1},
+        "runId": {"type": "string", "minLength": 1},
+        "day": {"type": "integer", "minimum": 0},
+        "plasticityBefore": {"$ref": "#/$defs/sha256"},
+        "plasticityAfter": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

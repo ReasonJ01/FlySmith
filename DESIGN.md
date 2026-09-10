@@ -1,43 +1,65 @@
 # FlySmith — V1 build specification
 
-This document is the implementation contract for FlySmith V1. It supersedes unresolved choices in `PLAN.md`.
+This is the implementation source of truth for FlySmith V1. `FINAL_DESIGN.md` records the research rationale; where wording or provisional parameters differ, this file governs implementation.
 
 ## 1. Objective
 
-FlySmith connects a local Bondsmith-compatible savings environment to a whole-MaleCNS neural simulation. Each savings option is encoded as an artificial conditioned stimulus in Kenyon cells (KCs), propagated through the complete retained MaleCNS graph, valued from mushroom-body output neuron (MBON) activity, converted into one savings action, and later reinforced through dopamine-gated KC→MBON plasticity when the option's outcome resolves.
+FlySmith connects a local Bondsmith-compatible short-term savings environment to a complete MaleCNS neural simulation.
 
-The V1 hypothesis is:
+```text
+Bondsmith-compatible state
+        ↓
+financial option features
+        ↓
+deterministic sparse KC conditioned stimulus
+        ↓
+complete MaleCNS recurrent simulation
+        ↓
+MBON11 approach / MBON01 avoidance readout
+        ↓
+option score
+        ↓
+HOLD or fixed-tranche ALLOCATE
+        ↓
+realized short-term outcome
+        ↓
+exact cue replay + DAN teaching
+        ↓
+restricted KC→MBON efficacy change
+```
 
-> A sparse artificial option representation imposed on MaleCNS KCs can acquire outcome-dependent value through compartment-specific dopamine-gated depression of existing KC→MBON synapses, producing reproducible changes in an MBON approach-minus-avoidance score that alter subsequent option selection.
+V1 tests this falsifiable hypothesis:
 
-No real money is involved. Time advances only when the local environment is explicitly advanced.
+> A sparse artificial option representation imposed on MaleCNS Kenyon cells can acquire outcome-dependent value through compartment-specific dopamine-gated depression of existing KC→MBON synapses, producing specific and reversible changes in an MBON approach-minus-avoidance score that alter later option selection.
+
+No real money is involved. Simulated time moves only after an explicit one-day advance command.
 
 ---
 
-# 2. Pinned upstreams
+## 2. Pinned neural provenance
 
-## 2.1 MaleCNS dataset
+### 2.1 Connectome
 
-Use the public neuPrint dataset:
-
-```text
-male-cns:v1.0
-```
-
-The exact exported source hashes, dataset UUID/version metadata and graph artifact hash must be persisted in every experiment manifest.
-
-## 2.2 Numerical simulator baseline
-
-Use the DoomFly whole-connectome implementation as the numerical reference and provenance source:
+Use:
 
 ```text
-repository: https://github.com/nftechie/doomfly
-commit:     71ecf53d78eaffaf1a57ed7b0ccf5d458abc9f33
-model:      adaptive-centered-v6
-license:    MIT
+MaleCNS dataset: male-cns:v1.0
 ```
 
-Relevant upstream files at that commit:
+Persist the MaleCNS dataset UUID/version metadata and hashes of every normalized source artifact used to build the graph.
+
+### 2.2 Numerical reference
+
+Use this exact DoomFly revision as the numerical reference:
+
+```text
+repo:    nftechie/doomfly
+commit:  71ecf53d78eaffaf1a57ed7b0ccf5d458abc9f33
+model:   adaptive-centered-v6 numerical dynamics
+license: MIT
+```
+
+Reference files:
 
 ```text
 doom/prepare.py
@@ -46,190 +68,161 @@ doom/engine.py
 doom/native.py
 doom_learning_v6/brain.py
 doom_learning_v6/kernel.cpp
-doom_learning_v6/rule.py
 doom_learning/circuit.py
 ```
 
-FlySmith must vendor or port the required implementation at this exact commit. It must not import a moving upstream `main` at runtime.
+Implementation rule: vendor the required upstream source at that commit under `vendor/doomfly/` and preserve its MIT notice. Do not import or clone a moving upstream branch at runtime.
 
-If upstream code is copied or substantially adapted, retain the MIT copyright/license notice as required by the upstream license.
+FlySmith uses the upstream graph construction and numerical integration assumptions, but implements its own explicit two-compartment teaching rule. The DoomFly learning rule is a reference, not FlySmith's policy.
 
-## 2.3 Graph construction
+### 2.3 Graph construction
 
-Follow `doom/prepare.py` at the pinned commit:
+Match pinned `doom/prepare.py`:
 
-- retain every released directed edge, including weak and self edges;
-- preserve MaleCNS source IDs as the canonical neuron IDs;
-- represent the graph as CSR arrays;
-- derive synaptic sign from the presynaptic neurotransmitter assumption used by the pinned upstream;
-- initial edge weight is:
+- keep every released directed connection row, including weak and self edges;
+- use MaleCNS source IDs as canonical neuron IDs;
+- store the graph as CSR arrays;
+- infer sign from the pinned presynaptic neurotransmitter mapping;
+- calculate initial weight as
 
 ```text
 weight = synapse_count × transmitter_sign × 0.275
 ```
 
-Do not threshold or crop the graph for FlySmith.
+Do not prune the graph to the mushroom body.
 
-A generated graph manifest must include SHA-256 hashes of `ids`, `ptr`, `post`, `weight`, annotation input and normalized source files. A run must refuse a graph whose hashes do not match its configured manifest.
+The generated graph manifest must hash at least `ids`, `ptr`, `post`, `weight`, annotations and normalized source inputs. FlySmith must refuse to run if the current artifacts do not match the manifest.
 
 ---
 
-# 3. Neural dynamics
+## 3. Numerical model
 
-V1 inherits the pinned `adaptive-centered-v6` numerical assumptions unless explicitly overridden here:
+Use the pinned baseline constants:
 
 ```text
 dt                         0.1 ms
 spike threshold            -45 mV
-rest, non-KC               -52 mV
+rest, ordinary neuron      -52 mV
 rest, KC                   -60 mV
-membrane time constant      20 ms
-synaptic time constant       5 ms
+membrane tau                20 ms
+synaptic tau                  5 ms
 transmission delay           1.8 ms
 refractory period            2.2 ms
-KC adaptation jump           8 mV
-KC adaptation tau          200 ms
+KC adaptation jump             8 mV
+KC adaptation tau            200 ms
 ```
 
-The model is deterministic given graph, initial state and external currents. FlySmith therefore does not invent a neural random seed. Seeds are used for synthetic cue generation, random projections, bootstrap statistics and environment generation only.
+The chosen engine accepts **constant external current**, not Poisson-Hz stimulation. Financial cues and teaching pulses are therefore current injections into explicitly registered neurons.
 
-### Important input correction
-
-The pinned simulator accepts **external current**, not Poisson firing-rate input. FlySmith's artificial cue is therefore delivered by adding a constant current to selected KC indices for a defined interval.
-
-Retinal and lamina drives are disabled for V1 option trials:
+For V1 option and teaching assays:
 
 ```text
-luminance = all zeros
-lamina_bias = 0
+retinal luminance = 0
+lamina_bias       = 0
+background tonic  = 0 for every neuron
 ```
 
-No financial information is injected anywhere except the selected KC cue. Other tonic/model currents must be fixed by configuration and hashed into the experiment manifest.
+The model is deterministic for a fixed graph, transient state, learned state and external-current schedule. V1 has no neural random seed. Seeds exist only for the synthetic KC projection, calibration cue generation, bootstrapping and optional environment fixtures.
 
 ---
 
-# 4. Repository/runtime split
+## 4. State categories
 
-Recommended implementation split:
+Implement these as separate state classes/files. They must never be silently conflated.
+
+### Structural — immutable
 
 ```text
-flysmith/
-  fly/                 Python 3.12 + C++17 kernel
-  experiment/          Python 3.12
-  schemas/             JSON Schema 2020-12
-  bondsmith-adapter/   implementation chosen by Bondsmith engineer
-  config/
-  outputs/
+MaleCNS graph topology
+structural graph weights
+neuron registry
+projection algorithm + seed
+simulator source/build hashes
 ```
 
-The fly core and Bondsmith integration communicate only through the adapter contract in section 13. The fly code must not call undocumented Bondsmith internals directly.
+### Learned — persistent between simulated days
+
+```text
+efficacy multipliers on registered KC→MBON11 edges
+efficacy multipliers on registered KC→MBON01 edges
+```
+
+### Transient neural — cleared/restored by protocol
+
+```text
+membrane voltages
+synaptic conductances
+refractory counters
+delay queues
+KC adaptation
+eligibility/modulator traces
+spike counters
+external drive
+```
+
+Across financial days, **only learned efficacy persists**. This makes persistent behavioral change attributable to the declared memory state rather than residual electrical activity.
 
 ---
 
-# 5. Neuron registry
+## 5. Neuron registry
 
-## 5.1 Registry source of truth
+Generate `config/neuron-registry.json`. It must validate against `schemas/neuron-registry.schema.json`.
 
-Generate `config/neuron-registry.json` from the pinned MaleCNS export. Never hand-copy body IDs into source code.
+### 5.1 Required typed populations
 
-Resolve against the normalized neuron table used to build the graph so that every `source_id` maps to exactly one simulation index.
-
-## 5.2 Required populations
-
-### Eligible KC pool
-
-Include all neurons whose normalized `cell_type` begins with `KC`, except these visual/accessory-calyx classes:
+Resolve exact MaleCNS `cell_type` values:
 
 ```text
-KCg-d
-KCab-p
+MBON11   primary approach-side readout; MBON-γ1pedc>α/β
+MBON01   primary avoidance-side readout; MBON-γ5β′2a
+MBON02   secondary validation readout
+MBON03   secondary validation readout
+PPL101   negative teacher; PPL1-γ1pedc
+PAM15    positive teacher; PAM-γ5β′2a
 ```
 
-If a future pinned export introduces additional KC classes, generation must print them and fail until the allow/exclude list is explicitly reviewed.
+PAM15 is deliberately chosen over PAM02 because PAM15 spans the γ5/β′2a compartment associated with MBON01, while PAM02 is the β′2a DAN type only.
 
-### Primary readouts
+Do not hard-code body IDs from papers, other connectomes or other projects. Resolve them from the pinned MaleCNS export and map each source ID to its simulation index.
+
+### 5.2 Eligible KC pool
+
+A neuron is `kcEligible` iff:
+
+1. its normalized `cell_type` starts with `KC`; and
+2. it has at least one retained outgoing structural edge to a registered MBON01 or MBON11 neuron.
+
+This removes KCs that cannot participate directly in either V1 memory compartment and avoids an arbitrary sensory-subtype allowlist.
+
+Record aligned `rootSide`/hemisphere metadata for KCs. Only KCs resolving unambiguously to `L` or `R` are eligible in V1. Registry generation fails if fewer than 100 eligible KCs exist on either side.
+
+### 5.3 Plastic edge sets
 
 ```text
-MBON11   # MBON-gamma1pedc>alpha/beta; approach-side readout
-MBON01   # MBON-gamma5beta'2a; avoidance-side readout
+negative plastic set = every existing kcEligible → MBON11 edge
+positive plastic set = every existing kcEligible → MBON01 edge
 ```
 
-### Secondary validation readouts
+The graph's structural weight remains immutable. Each plastic edge gets an independent efficacy multiplier initialized to `1.0`.
 
-```text
-MBON02
-MBON03
-```
-
-### Teaching populations
-
-```text
-PPL101   # negative teaching; PPL1-gamma1pedc
-PAM02    # positive teaching; PAM-beta'2a
-PAM01    # validation/ablation only in V1
-```
-
-The current MaleCNS v1.0 public explorer reports two MBON01 neurons, bilateral MBON11, two PPL101 neurons, and 17 PAM02 neurons; registry generation must nevertheless derive the exact IDs from the pinned export and treat these counts as cross-checks rather than hard-coded identity.
-
-## 5.3 Registry schema
-
-The generated file must conform to `schemas/neuron-registry.schema.json` and have this logical shape:
-
-```json
-{
-  "schemaVersion": 1,
-  "dataset": {
-    "name": "male-cns:v1.0",
-    "uuid": "<resolved-at-build>",
-    "sourceManifestSha256": "<sha256>"
-  },
-  "graph": {
-    "neuronCount": 166700,
-    "edgeCount": 25582938,
-    "idsSha256": "<sha256>",
-    "ptrSha256": "<sha256>",
-    "postSha256": "<sha256>",
-    "weightSha256": "<sha256>"
-  },
-  "populations": {
-    "kcEligible": {
-      "selector": "cell_type startsWith KC; exclude KCg-d,KCab-p",
-      "bodyIds": [1],
-      "simulationIndices": [0]
-    },
-    "mbon11": { "cellType": "MBON11", "bodyIds": [1], "simulationIndices": [0] },
-    "mbon01": { "cellType": "MBON01", "bodyIds": [1], "simulationIndices": [0] },
-    "mbon02": { "cellType": "MBON02", "bodyIds": [1], "simulationIndices": [0] },
-    "mbon03": { "cellType": "MBON03", "bodyIds": [1], "simulationIndices": [0] },
-    "ppl101": { "cellType": "PPL101", "bodyIds": [1], "simulationIndices": [0] },
-    "pam02": { "cellType": "PAM02", "bodyIds": [1], "simulationIndices": [0] },
-    "pam01": { "cellType": "PAM01", "bodyIds": [1], "simulationIndices": [0] }
-  },
-  "plasticEdges": {
-    "negative": [{ "preIndex": 0, "postIndex": 0, "edgeIndex": 0, "structuralWeight": 1.0 }],
-    "positive": [{ "preIndex": 0, "postIndex": 0, "edgeIndex": 0, "structuralWeight": 1.0 }]
-  }
-}
-```
-
-`plasticEdges.negative` is every existing eligible-KC → MBON11 edge.
-
-`plasticEdges.positive` is every existing eligible-KC → MBON01 edge.
+### 5.4 Registry validation
 
 Generation must fail if:
 
-- any required population resolves to zero neurons;
-- a body ID is missing from the simulation graph;
-- any listed simulation index maps back to a different body ID;
+- any required typed population resolves to zero cells;
+- any source ID is absent from the simulation graph;
+- any simulation index maps back to a different source ID;
+- either KC hemisphere has fewer than 100 eligible cells;
 - either plastic edge set is empty;
-- a plastic edge's post neuron is outside its declared MBON population;
-- graph hashes differ from the pinned graph manifest.
+- a negative plastic edge does not terminate in MBON11;
+- a positive plastic edge does not terminate in MBON01;
+- graph/annotation provenance hashes differ from the pinned manifest.
 
 ---
 
-# 6. Financial observation
+## 6. Financial observation contract
 
-Every destination, including cash, is represented as exactly four normalized observations:
+Every destination, including cash, becomes four observations:
 
 ```text
 yield
@@ -238,9 +231,9 @@ liquidity
 exposure
 ```
 
-The Bondsmith adapter exposes integer financial values. The neural encoder never receives pounds, product names or JSON objects directly.
+At the adapter boundary money is integer minor units and rates are integer basis points. Never use floating-point currency.
 
-For a candidate allocation amount `a`:
+For a candidate allocation of `a` minor units:
 
 ```text
 yield     = clip((annualRateBps - minRateBps) / (maxRateBps - minRateBps), 0, 1)
@@ -249,23 +242,20 @@ liquidity = clip((cashBalanceMinor - a) / totalAssetsMinor, 0, 1)
 exposure  = clip((destinationBalanceMinor + a) / totalAssetsMinor, 0, 1)
 ```
 
-For the cash option:
+Cash is evaluated as an option with:
 
 ```text
 a = 0
+annualRateBps = configured cash rate, default 0
 effectiveLockDays = 0
 destinationBalanceMinor = cashBalanceMinor
 ```
 
-All normalization bounds come from the experiment config and are frozen before a run. They must not be tuned after observing portfolio performance.
-
-Use integer minor currency units and integer basis points at the environment boundary; do not use floating-point money.
+Normalization bounds are experiment configuration, frozen before a run. They may not be recomputed from the products available on a particular day.
 
 ---
 
-# 7. Option feature → KC cue
-
-## 7.1 Exact projection
+## 7. Exact feature → KC encoding
 
 Let:
 
@@ -274,107 +264,94 @@ x = [yield, lock, liquidity, exposure]
 u = 2x - 1
 ```
 
-Generate a fixed matrix and bias once per experiment configuration using NumPy `PCG64`:
+For **each hemisphere separately**, enumerate eligible KCs in ascending simulation-index order and create a fixed projection using NumPy PCG64:
 
 ```python
-rng = np.random.Generator(np.random.PCG64(projectionSeed))
-W = rng.normal(0.0, 0.5, size=(K, 4))
-b = rng.normal(0.0, 0.25, size=K)
-z = W @ u + b
+rng = np.random.Generator(np.random.PCG64(projection_seed))
+W_L = rng.normal(0.0, 0.5, size=(K_L, 4))
+b_L = rng.normal(0.0, 0.25, size=K_L)
+W_R = rng.normal(0.0, 0.5, size=(K_R, 4))
+b_R = rng.normal(0.0, 0.25, size=K_R)
+
+z_L = W_L @ u + b_L
+z_R = W_R @ u + b_R
 ```
 
-where `K` is the number of eligible KCs in the generated registry.
-
-Select:
+Select independently per hemisphere:
 
 ```text
-k = ceil(kcSparsity × K)
+k_L = ceil(kcSparsity × K_L)
+k_R = ceil(kcSparsity × K_R)
 ```
 
-KCs with the largest `k` values of `z`. Ties are broken by ascending simulation index.
+using the largest `z` values; exact ties break by ascending simulation index.
 
-V1 default:
+V1 defaults:
 
 ```text
-kcSparsity = 0.05
 projectionSeed = 20260910
+kcSparsity     = 0.05
 ```
 
-Persist the selected simulation indices and a SHA-256 cue hash with every decision. Delayed teaching replays the stored indices, not a recomputed projection.
+The bilateral cue is the union of selected L and R indices. Store the exact indices and SHA-256 cue hash with every action. Delayed teaching replays stored indices; it does not recompute them.
 
-## 7.2 Artificial cue semantics
-
-No KC means “yield”, “lock”, or any other financial feature. The fixed random projection is the only artificial representational boundary. Similar feature vectors tend to produce overlapping sparse KC ensembles; the downstream connectome and plasticity assign value.
+No KC is assigned a semantic label such as “rate neuron.” The artificial interface is the distributed conditioned stimulus itself.
 
 ---
 
-# 8. Trial protocol
+## 8. Decision-day neural protocol
 
-## 8.1 Day checkpoint
+### 8.1 Day-start state
 
-At the start of a decision day, create one immutable `day-start` neural checkpoint containing:
+At the beginning of each day create an immutable neural snapshot containing the current learned efficacies with all transient state reset to canonical resting values.
 
-- all membrane/synaptic/delay/adaptation state;
-- all current learned efficacy values;
-- graph/configuration hashes.
+Every blank and option assay on that day starts from this exact snapshot.
 
-Every option trial for that day starts from the exact same checkpoint.
+### 8.2 Blank assay
 
-No option trial is allowed to mutate the day's persistent learned weights.
-
-## 8.2 Blank baseline
-
-From the day-start checkpoint, run one blank trial with:
+Restore day-start state and run for calibrated `trialDurationMs` with:
 
 ```text
-KC option current = 0
-retina = 0
-lamina_bias = 0
-learning = false
+option current = 0
+learning       = false
+retina         = 0
+lamina bias    = 0
+tonic          = 0
 ```
 
-for `trialDurationMs`.
+Record MBON01/02/03/11 spike counts and rates.
 
-Record MBON01/02/03/11 rates.
+### 8.3 Option assay
 
-## 8.3 Option trial
+Restore day-start state. Inject calibrated constant `kcCurrent` into exactly the cue KCs for calibrated `trialDurationMs`; learning remains disabled. Record full spike counts plus MBON rates.
 
-Restore the day-start checkpoint, stimulate the option's selected KC ensemble with constant `kcCurrent` for `trialDurationMs`, disable learning, then record spike counts for all neurons and primary/secondary MBON rates.
-
-V1 starting duration:
+Starting duration before calibration:
 
 ```text
-trialDurationMs = 500
+500 ms
 ```
 
-The calibrated value replaces this default in `config/calibration.json`.
+### 8.4 Population rate
 
-## 8.4 Rate computation
-
-For population `P`:
+For registered population `P`:
 
 ```text
-rateHz(P) = sum(spikes_i for i in P) / |P| / trialSeconds
+rateHz(P) = total spikes in P / number of cells in P / trial seconds
+deltaHz(P) = option rateHz(P) - blank rateHz(P)
 ```
 
-Baseline-subtracted response:
-
-```text
-deltaHz(P) = optionRateHz(P) - blankRateHz(P)
-```
+Option assays must not mutate persistent efficacy.
 
 ---
 
-# 9. MBON value decoder
+## 9. Neural value decoder
 
-Calibration produces frozen naive statistics:
+Gate B freezes naive calibration statistics:
 
 ```text
-mu11, sigma11
-mu01, sigma01
+mu11, sigma11 for deltaHz(MBON11)
+mu01, sigma01 for deltaHz(MBON01)
 ```
-
-from the synthetic cue panel in Gate B.
 
 For an option:
 
@@ -384,25 +361,23 @@ avoidanceZ = (deltaHz(MBON01) - mu01) / sigma01
 score       = approachZ - avoidanceZ
 ```
 
-If either sigma is below `0.5 Hz`, Gate B fails and the financial loop must not run.
+MBON02 and MBON03 are always logged but are not part of V1's primary decoder.
 
-MBON02 and MBON03 are logged but not included in the primary V1 score.
+If `sigma11 < 0.5 Hz` or `sigma01 < 0.5 Hz`, Gate B fails.
 
-## 9.1 Choice rule
+### Choice
 
-Evaluate cash and every valid product independently.
+Evaluate cash plus every valid product independently from the same day-start state.
 
-Let `bestProduct` be the valid product with maximum score. Product ties within `1e-9` are broken lexicographically by `productId`.
-
-V1 action rule:
+Let `bestProduct` be the product with maximum score. Exact/tolerance ties within `1e-9` break lexicographically by `productId`.
 
 ```text
 if no valid product:
     HOLD
-else if score(bestProduct) < score(cash) + indifferenceMarginZ:
+elif score(bestProduct) < score(cash) + indifferenceMarginZ:
     HOLD
 else:
-    ALLOCATE configured tranche to bestProduct
+    ALLOCATE trancheMinor to bestProduct
 ```
 
 Default:
@@ -411,269 +386,288 @@ Default:
 indifferenceMarginZ = 0.5
 ```
 
-Position size is not neural in V1.
+V1 neural activity selects destination only; position size is fixed by configuration.
 
 ---
 
-# 10. Plasticity
+## 10. Learning mechanism
 
-## 10.1 Structural vs learned weight
+### 10.1 Positive reinforcement
 
-Every plastic edge stores:
+Teacher:
 
 ```text
-structuralWeight = original graph weight
+PAM15 / PAM-γ5β′2a
+```
+
+Mutable edges:
+
+```text
+kcEligible → MBON01
+```
+
+Positive teaching depresses the active cue's contribution to the avoidance-side output.
+
+### 10.2 Negative reinforcement
+
+Teacher:
+
+```text
+PPL101 / PPL1-γ1pedc
+```
+
+Mutable edges:
+
+```text
+kcEligible → MBON11
+```
+
+Negative teaching depresses the active cue's contribution to the approach-side output.
+
+### 10.3 Weight representation
+
+For every registered plastic edge:
+
+```text
+structuralWeight = immutable original graph weight
 efficacy         = 1.0 initially
 effectiveWeight  = structuralWeight × efficacy
 ```
 
-Only efficacy is mutable.
-
-V1 bounds:
+Bounds:
 
 ```text
 0.10 <= efficacy <= 1.00
 ```
 
-There is no potentiation and no topology change in V1.
+No potentiation, new edge or topology change exists in V1.
 
-## 10.2 Negative teaching
+### 10.4 Explicit teaching episode
 
-A negative outcome uses `PPL101` and may modify only eligible-KC → MBON11 edges.
-
-## 10.3 Positive teaching
-
-A positive outcome uses `PAM02` and may modify only eligible-KC → MBON01 edges.
-
-`PAM01` is a validation/ablation population only and is not part of the primary learning rule.
-
-## 10.4 Teaching episode
-
-For a resolved allocation, replay the exact stored KC cue and apply the appropriate DAN current using this schedule:
+When a non-neutral outcome resolves, replay the exact stored cue:
 
 ```text
-0–100 ms     cue only
-100–300 ms   cue + DAN, learning enabled
-300–400 ms   neither, learning disabled
+0–100 ms     cue current only
+100–300 ms   cue current + teacher-DAN current; plasticity armed
+300–400 ms   no artificial current; plasticity disarmed
 ```
 
-Start the episode from the persistent neural checkpoint at the point teaching is applied. After the episode, keep learned efficacies but clear transient membrane, delay-queue, eligibility, modulation and adaptation state before the next financial decision. This makes memory reside only in the declared plastic weights across simulated days.
+Only explicit teacher stimulation can arm FlySmith plasticity. Endogenous modeled dopamine activity never changes FlySmith efficacy by itself.
 
-## 10.5 Learning update
+After the episode preserve efficacy, then reset **all transient neural state** before any subsequent decision or teaching episode.
 
-For each eligible plastic edge whose presynaptic KC fired during the teaching window:
+### 10.5 FlySmith plasticity update
+
+During the 200 ms paired window calculate measured rates for every active cue KC and the teacher population:
 
 ```text
-kcActivity = min(kcRateHz / kcActivityReferenceHz, 1)
+kcActivity  = min(kcRateHz / kcActivityReferenceHz, 1)
 danActivity = min(danPopulationRateHz / danActivityReferenceHz, 1)
 
 efficacy *= exp(-eta × teachingMagnitude × kcActivity × danActivity)
-efficacy = max(0.10, efficacy)
+efficacy = max(efficacy, efficacyFloor)
 ```
 
-Defaults before calibration:
+Starting values before Gate C/D calibration:
 
 ```text
-kcActivityReferenceHz  = 50
-danActivityReferenceHz = 50
-eta                     = 0.05
+eta                      0.05
+efficacyFloor            0.10
+kcActivityReferenceHz   50
+danActivityReferenceHz  50
 ```
 
-`eta` is calibrated only against synthetic conditioning Gates C/D, never against financial return.
+`eta` may be changed only by the synthetic conditioning calibration procedure. It must never be selected based on financial return.
 
-This is a FlySmith-specific, deliberately conservative compartment rule. It uses the experimentally supported depression direction but does not claim to reproduce the complete biological plasticity rule.
+This is an explicit model assumption with a biologically motivated compartment/sign constraint; it is not claimed to reproduce all in-vivo dopamine plasticity.
 
 ---
 
-# 11. Outcome and reward semantics
+## 11. Outcome semantics
 
-Each allocation stores the cue active when it was chosen.
+Every allocation stores its exact cue and principal.
 
-When an allocation resolves, the environment creates:
+A resolved allocation receives:
 
 ```text
-interestReward   in [0, 1]
-liquidityPenalty in [-1, 0]
-total            in [-1, 1]
+interestReward   ∈ [0, 1]
+liquidityPenalty ∈ [-1, 0]
+total            ∈ [-1, 1]
 ```
 
-## 11.1 Positive component
+### Interest
 
 ```text
-interestReward = clip(
-  interestCreditedMinor / interestReferenceMinor,
-  0,
-  1
-)
+interestReferenceMinor = ceil(trancheMinor × interestReferenceFractionOfTranche)
+interestReward = clip(interestCreditedMinor / interestReferenceMinor, 0, 1)
 ```
 
-Default:
+Default reference fraction:
 
 ```text
-interestReferenceMinor = ceil(trancheMinor × 0.005)
+0.005
 ```
 
-That is a 50-basis-point-of-principal reference for the deliberately compressed short-term experiment. It is an experimental scale, not an AER interpretation.
+This deliberately makes short simulated terms teachable; it is an experimental reward scale, not an AER conversion.
 
-## 11.2 Liquidity component
+### Liquidity shock
 
-Liquidity shocks are FlySmith environment events. If a shock produces `shortfallMinor > 0`, distribute a negative penalty across currently locked allocations pro rata by locked principal:
+Liquidity shocks belong to the FlySmith scenario. If a required payment has `shortfallMinor > 0`, allocate that penalty over currently locked allocations pro rata by locked principal:
 
 ```text
-allocationShare = lockedPrincipalMinor / totalLockedPrincipalMinor
-allocationShortfall = shortfallMinor × allocationShare
+share = allocation.lockedPrincipalMinor / totalLockedPrincipalMinor
+allocationShortfall = shortfallMinor × share
 liquidityPenalty = -clip(allocationShortfall / trancheMinor, 0, 1)
 ```
 
-## 11.3 Total and teaching magnitude
+### Teaching sign
 
 ```text
 total = clip(interestReward + liquidityPenalty, -1, 1)
 teachingMagnitude = abs(total)
+
+total > 0  → PAM15 teaching on stored cue
+total < 0  → PPL101 teaching on stored cue
+total = 0  → no teaching
 ```
 
-```text
-total > 0  -> PAM02 teaching on stored cue
-total < 0  -> PPL101 teaching on stored cue
-total = 0  -> no teaching
-```
-
-A HOLD/cash decision creates no plastic teaching event in V1 unless a later explicit extension defines one.
+Do not include opportunity cost in V1. HOLD/cash receives no teaching in V1.
 
 ---
 
-# 12. Calibration and mandatory gates
+## 12. Calibration protocol and gates
 
-Calibration is a build/run prerequisite. It writes `config/calibration.json`; production experiment commands must fail if that file is absent or its graph/config hashes are stale.
+Calibration writes `config/calibration.json`, validating against `schemas/calibration.schema.json`. `decide` and `advance-day` must fail if calibration is absent, any gate is false, or provenance hashes are stale.
 
-Use NumPy PCG64 seed `20260910` to generate a fixed panel of 64 feature vectors uniformly on `[0,1]^4` for Gates A/B. Generate 32 conditioning cue pairs from the same RNG stream, rejecting pairs whose KC-set Jaccard overlap exceeds `0.25`.
+### Fixed calibration data
 
-Use nonparametric bootstrap confidence intervals with:
+Use PCG64 seed `20260910` to generate 64 feature vectors uniformly on `[0,1]^4`.
+
+Generate 32 conditioning cue pairs from the same RNG stream. Reject a pair if the Jaccard overlap of its complete bilateral KC sets exceeds `0.25`.
+
+Bootstrap statistics:
 
 ```text
-bootstrap resamples = 10,000
-bootstrap seed      = 9001
-confidence interval = percentile 95%
+resamples:       10,000
+bootstrap seed:  9001
+CI:              percentile 95%
 ```
 
-## Gate A — KC stimulus propagation and saturation
+### Gate A — KC propagation / network saturation
 
-Test candidate KC currents:
+Test KC current candidates:
 
 ```text
 [16, 18, 20, 24, 30]
 ```
 
-mV-equivalent external drive units inherited from the pinned simulator.
+in the pinned simulator's current units, using 500 ms assays for all 64 cues.
 
-For each current and all 64 cues, run a 500 ms cue trial from a reset naive state.
+A current passes only if:
 
-A candidate current passes if all are true:
-
-1. median stimulated-KC firing rate is `>= 5 Hz` and `<= 80 Hz`;
+1. median stimulated-KC rate is 5–80 Hz;
 2. on at least 90% of cues, at least 90% of stimulated KCs fire at least once;
-3. median fraction of non-KC neurons firing at least once is `< 0.25`;
-4. 95th percentile of that non-KC active fraction is `< 0.40`.
+3. median fraction of non-KC neurons firing at least once is < 0.25;
+4. 95th percentile of that non-KC active fraction is < 0.40.
 
-Choose the **lowest** candidate current that passes. If none pass, Gate A fails.
+Choose the lowest passing current. No pass means Gate A fails.
 
-## Gate B — MBON readout
+### Gate B — MBON readout
 
-Using the selected KC current and the same 64 cues:
+At selected KC current:
 
-1. run blank + cue trials;
-2. compute `deltaHz(MBON11)` and `deltaHz(MBON01)`;
-3. require standard deviation of each channel across cues `>= 0.5 Hz`;
-4. require at least 75% of cues to evoke at least one spike in each primary MBON population during the cue trial;
-5. require the resulting score distribution IQR `>= 0.5`.
+1. run blank + all 64 cue assays;
+2. compute deltaHz for MBON11 and MBON01;
+3. require standard deviation of both primary channels >= 0.5 Hz;
+4. require at least 75% of cues to cause at least one spike in each primary MBON population;
+5. require score IQR >= 0.5.
 
-If any criterion fails, Gate B fails. Store `mu11`, `sigma11`, `mu01`, `sigma01` from this panel.
+Store `mu11`, `sigma11`, `mu01`, `sigma01`. Any failed criterion fails Gate B.
 
-## DAN-current calibration
+### DAN current calibration
 
-Before Gates C/D, independently calibrate PPL101 and PAM02 current using candidates:
+For PPL101 and PAM15 separately test:
 
 ```text
 [8, 12, 16, 20, 24, 30]
 ```
 
-for the 200 ms teaching window. Choose the lowest current producing a DAN population rate between `20 and 80 Hz` without pushing the non-KC active fraction above `0.40`.
+over the 200 ms paired window.
 
-If either DAN population cannot meet this criterion, conditioning gates fail.
+Select the lowest current producing population rate 20–80 Hz while keeping the global non-KC active fraction <= 0.40. If either teacher has no passing current, Gates C/D cannot run.
 
-## Gate C — aversive conditioning
+### Gate C — aversive conditioning
 
-For each of 32 cue pairs `(X,Y)`:
+For each of 32 dissimilar pairs `(X,Y)`:
 
-1. measure pre-training scores for X and Y;
-2. perform 5 X + PPL101 teaching episodes at `teachingMagnitude=1`;
-3. measure post-training X and Y;
-4. run a matched sham condition with the same cue schedule but no DAN current.
+1. record naive scores X/Y;
+2. run 5 X + PPL101 teaching episodes at magnitude 1;
+3. record post scores X/Y;
+4. run a matched sham from naive state with identical X presentations but no DAN current.
 
-For each pair:
+Define:
 
 ```text
 deltaX = postX - preX
-deltaY = postY - preY
 shamDeltaX = shamPostX - shamPreX
 ```
 
-Gate C passes if:
+Pass iff:
 
-- median `deltaX <= -0.5` score units;
-- upper bound of the bootstrap 95% CI for `median(deltaX - shamDeltaX)` is `< 0`.
+```text
+median(deltaX) <= -0.5
+upper 95% bootstrap CI of median(deltaX - shamDeltaX) < 0
+```
 
-## Gate D — appetitive conditioning
+### Gate D — appetitive conditioning
 
-Repeat Gate C using PAM02 teaching.
+Repeat Gate C with PAM15.
 
-Gate D passes if:
+Pass iff:
 
-- median `deltaX >= +0.5` score units;
-- lower bound of the bootstrap 95% CI for `median(deltaX - shamDeltaX)` is `> 0`.
+```text
+median(deltaX) >= +0.5
+lower 95% bootstrap CI of median(deltaX - shamDeltaX) > 0
+```
 
-## Gate E — cue specificity
+### Gate E — cue specificity
 
-Evaluate the same conditioning runs.
-
-For aversive and appetitive conditioning separately define:
+For each direction:
 
 ```text
 specificity = abs(deltaX) - abs(deltaY)
 ```
 
-Gate E passes only if, for both teaching directions:
+Pass only if, for **both** aversive and appetitive conditioning:
 
-- median specificity `>= 0.5`;
-- lower bound of the bootstrap 95% CI of median specificity is `> 0`.
+```text
+median(specificity) >= 0.5
+lower 95% bootstrap CI of median(specificity) > 0
+```
 
-## Gate F — reset reversibility
+### Gate F — reset reversibility
 
 After conditioning:
 
-1. reset all plastic efficacies to exactly `1.0`;
-2. clear all transient neural state;
-3. rerun all pre-training cue trials.
+1. set every plastic efficacy exactly to `1.0`;
+2. clear all transient state;
+3. replay the original naive assays.
 
-Gate F passes if:
+Pass iff:
 
-- plastic-efficacy SHA-256 equals the original naive efficacy hash;
-- every primary MBON rate differs from its corresponding pre-training value by at most `1e-6 Hz` on the same machine/build;
-- every decoded score differs by at most `1e-6`.
+- efficacy SHA-256 equals the original naive efficacy hash;
+- each primary MBON rate matches its corresponding original value within `1e-6 Hz` on the same binary/machine;
+- every score matches within `1e-6`.
 
-No financial experiment may be described as learned behavior unless Gates A–F all pass for the exact graph, simulator build and calibration manifest used by that experiment.
+A financial run may not be called a learned run unless A–F pass for exactly its graph, registry, executable and calibration hashes.
 
 ---
 
-# 13. Bondsmith adapter contract
+## 13. Bondsmith adapter
 
-The Bondsmith-specific engineer owns a local adapter. The fly core depends only on the following JSON-over-HTTP contract.
+The local Bondsmith integration is a replaceable adapter. The neural core knows only this loopback JSON-over-HTTP protocol. Wire shapes are also defined in `schemas/bondsmith-adapter.schema.json`.
 
-Base URL is configured as `bondsmithAdapterBaseUrl`. The adapter is expected to bind to loopback/local development infrastructure only in V1.
-
-## 13.1 `GET /flysmith/v1/state`
-
-Response:
+### `GET /flysmith/v1/state`
 
 ```json
 {
@@ -696,14 +690,9 @@ Response:
 }
 ```
 
-Requirements:
+`effectiveLockDays` means worst-case days until newly allocated money becomes usable under the local product rules.
 
-- amounts are integer minor units;
-- rates are integer basis points;
-- `effectiveLockDays` is the worst-case days until funds are usable under the local product semantics;
-- `stateVersion` changes whenever any value relevant to a decision changes.
-
-## 13.2 `POST /flysmith/v1/actions`
+### `POST /flysmith/v1/actions`
 
 Request:
 
@@ -719,17 +708,9 @@ Request:
 }
 ```
 
-or:
+or `{"type":"hold"}` as the action.
 
-```json
-{
-  "requestId": "uuid",
-  "expectedStateVersion": "opaque-monotonic-version",
-  "action": { "type": "hold" }
-}
-```
-
-Response:
+Successful response:
 
 ```json
 {
@@ -740,11 +721,14 @@ Response:
 }
 ```
 
-The adapter must make `requestId` idempotent. If `expectedStateVersion` is stale, it must reject rather than silently apply against different state.
+Rules:
 
-## 13.3 `POST /flysmith/v1/advance`
+- `requestId` is idempotent;
+- stale `expectedStateVersion` returns HTTP 409 and no mutation;
+- invalid product/amount returns HTTP 422 and no mutation;
+- accepted HOLD returns `allocationId: null`.
 
-Request:
+### `POST /flysmith/v1/advance`
 
 ```json
 {
@@ -754,7 +738,7 @@ Request:
 }
 ```
 
-V1 only permits `days = 1`.
+Only `days=1` is permitted.
 
 Response:
 
@@ -773,7 +757,7 @@ Response:
 }
 ```
 
-Allowed event types in V1:
+Allowed V1 adapter events:
 
 ```text
 maturity
@@ -783,26 +767,27 @@ product_opened
 product_closed
 ```
 
-FlySmith liquidity-shock events are defined in the experiment scenario, not invented by the Bondsmith adapter.
+FlySmith scenario liquidity shocks are not Bondsmith adapter events.
 
-## 13.4 Adapter conformance
+### Adapter conformance
 
-Before neural integration, the adapter must pass contract tests for:
+The Bondsmith engineer must pass the same black-box contract tests as the in-memory adapter:
 
-- integer money/rate fields;
-- idempotent action/advance request IDs;
-- stale-state rejection;
-- monotonic day advancement by exactly one;
-- maturity event reconciliation to an existing `allocationId`;
-- repeatable reset to a configured initial fixture if the local Bondsmith stack supports reset.
+- integer money and bps values;
+- action and advance idempotency;
+- stale-state 409 rejection;
+- invalid-action 422 rejection;
+- exactly one-day advancement;
+- maturity/withdrawal event reconciliation to known allocation IDs;
+- deterministic fixture reset when running test scenarios.
 
 ---
 
-# 14. Experiment configuration
+## 14. Experiment configuration
 
-Every run loads one immutable document conforming to `schemas/experiment-config.schema.json`.
+Each run loads one immutable JSON document validating against `schemas/experiment-config.schema.json`.
 
-Canonical example:
+Canonical V1 example:
 
 ```json
 {
@@ -846,119 +831,101 @@ Canonical example:
 }
 ```
 
-The run manifest must add immutable hashes for the registry, graph, calibration, executable/kernel and experiment config.
+At load time additionally validate `maxRateBps > minRateBps` and ensure the tranche can be represented safely as an integer in every target runtime.
 
 ---
 
-# 15. Trial and run records
+## 15. Records and reproducibility
 
-Every option evaluation writes one JSONL record conforming to `schemas/trial-record.schema.json` containing at minimum:
+Option assays validate against `schemas/trial-record.schema.json`.
+
+Every run must also persist:
+
+### Decision record
 
 ```text
-experimentId
-runId
-day
-stateVersion
-optionId
-features
-cueHash
-cueIndices
-blank MBON rates
-option MBON rates
-baseline-subtracted MBON rates
-score
-registry hash
-graph hash
-calibration hash
-plasticity hash before trial
-plasticity hash after trial
+experimentId, runId, day, adapter stateVersion
+all candidate option IDs and features
+all cue hashes and option scores
+cash score
+winner
+indifference/tie reasoning
+submitted action
+requestId
+adapter receipt/newStateVersion
 ```
 
-Decision records must additionally contain all option scores, selected action, action receipt and tie/indifference reasoning.
-
-Teaching records must contain allocation ID, stored cue hash, resolved outcome components, selected DAN population, DAN rate, teaching magnitude, changed-edge count and before/after plasticity hashes.
-
-A run is not considered reproducible unless all three record classes are present.
-
----
-
-# 16. State lifecycle
-
-There are three distinct state categories and implementations must keep them separate.
-
-### Structural state — immutable
+### Teaching record
 
 ```text
-graph topology
-structural synaptic weights
+experimentId, runId, day
+allocationId
+stored cue hash + exact indices
+interestReward, liquidityPenalty, total
+teachingMagnitude
+teacher = PAM15 | PPL101
+teacher population rate
+changed edge count
+plasticity hash before/after
+```
+
+### Run manifest
+
+Hash:
+
+```text
+experiment config
+MaleCNS source manifest
+graph arrays
 neuron registry
-projection matrix seed/config
+calibration manifest
+vendored upstream source
+FlySmith kernel/binary
+initial and final plasticity state
 ```
 
-### Learned state — persistent across days
-
-```text
-KC→MBON01 efficacy multipliers
-KC→MBON11 efficacy multipliers
-```
-
-### Transient neural state — never carried across financial days in V1
-
-```text
-membrane voltage
-synaptic conductance
-delay queues
-refractory counters
-KC adaptation
-eligibility traces
-modulator traces
-spike counters
-```
-
-After each option assay and after each teaching episode, transient state is restored/cleared according to the protocol. Only learned efficacy is persistent.
-
-This rule is mandatory because it makes a multi-day preference change attributable to the declared memory state rather than residual electrical activity.
+A run is replayable only when trial, decision, teaching and run-manifest records are present.
 
 ---
 
-# 17. Daily execution algorithm
+## 16. Exact day algorithm
 
 ```text
+DECIDE
 1. GET adapter state.
-2. Build cash option plus every product with canDeposit=true and a valid tranche.
-3. Compute four features for each option.
-4. Convert each feature vector into a stored sparse KC cue.
-5. Snapshot persistent learned efficacy + reset transient neural state.
-6. Run blank baseline.
-7. For every option:
-     restore identical day-start neural state
-     run cue trial with learning disabled
-     compute MBON score
-8. Select action using section 9.1.
-9. POST action with expected stateVersion.
-10. Persist decision and receipt.
-11. Stop. Do not advance time automatically.
+2. Form cash option plus products where canDeposit=true and configured tranche is valid.
+3. Compute four normalized features per option.
+4. Generate and persist each bilateral sparse KC cue.
+5. Reset transient neural state; preserve current efficacies.
+6. Run blank assay.
+7. For each option in lexical optionId order:
+     restore identical day-start state
+     run cue assay with learning=false
+     score MBON11 - MBON01
+8. Apply choice rule.
+9. POST action with requestId + expected stateVersion.
+10. Persist all records and stop.
 
-On explicit ADVANCE DAY:
-
-12. POST /advance with days=1.
-13. Apply configured FlySmith liquidity shock for the new day, if any.
-14. Convert maturity/liquidity consequences into per-allocation outcomes.
-15. For each nonzero resolved outcome:
-      load stored cue
-      execute PAM02 or PPL101 teaching episode
-      persist plasticity diff/hash
-16. Clear transient neural state.
-17. Persist new day state and stop.
+ADVANCE-DAY
+11. POST /advance with days=1 and expected stateVersion.
+12. Apply the configured FlySmith liquidity shock for the new day, if any.
+13. Resolve per-allocation outcome components.
+14. Process nonzero teaching outcomes in ascending allocationId order:
+      load exact stored cue
+      reset transient state
+      run PAM15 or PPL101 teaching episode
+      persist efficacy diff/hash
+15. Reset transient state.
+16. Fetch/persist the resulting adapter state and stop.
 ```
 
-Teaching events resolving on the same day are processed in ascending `allocationId` order to make results deterministic.
+No wall-clock scheduler exists in V1.
 
 ---
 
-# 18. Required commands
+## 17. Required CLI behavior
 
-The first implementation should expose these commands, names may be CLI aliases but behavior is fixed:
+Expose these commands or exact functional equivalents:
 
 ```text
 flysmith prepare-graph
@@ -972,135 +939,154 @@ flysmith reset-learning
 flysmith replay <runId>
 ```
 
-`decide` and `advance-day` must refuse execution when `verify-gates` has not passed for the exact current provenance hashes.
+`decide` and `advance-day` must hard-fail if current provenance does not match a calibration manifest with Gates A–F all passed.
+
+`reset-learning` sets all efficacy values to `1.0`, clears transient state and records the reset event.
+
+`replay` must perform no external mutations; it reconstructs recorded neural assays from persisted state and asserts recorded hashes/scores.
 
 ---
 
-# 19. Acceptance tests
+## 18. Work split
 
-A build is V1-complete when all are true:
-
-1. graph preparation reproduces and hashes the pinned whole-connectome artifact;
-2. registry generation resolves all required populations and plastic edge sets;
-3. cue projection is deterministic and stored cues replay exactly;
-4. Gates A–F pass and produce a signed calibration manifest;
-5. the in-memory test adapter passes the exact Bondsmith-port contract;
-6. the real local Bondsmith adapter passes the same contract tests unchanged;
-7. a 30-day fixture can be reset and replayed with identical actions, MBON scores and plasticity hashes;
-8. fixed-weight, sham-learning, trained, reset-learning, random-choice, highest-yield and cash-only controls can run against the same financial history;
-9. no source code path can alter structural connectivity during training;
-10. every claimed learned result can be traced from environment outcome → stored cue → DAN teaching → changed KC→MBON efficacy → changed later MBON score → changed action.
-
----
-
-# 20. Work split
-
-## Neural/simulation engineer
+### Neural/simulation engineer
 
 Owns:
 
 ```text
-graph preparation
-upstream kernel port/vendor
+vendored pinned DoomFly source
+graph preparation/provenance
+FlySmith kernel wrapper
 neuron registry
 KC projection
-trial runner
-MBON decoder
-plasticity
-calibration gates
-checkpoint/replay
+trial/checkpoint state lifecycle
+MBON readout
+KC→MBON efficacy layer
+PAM15/PPL101 teaching
+Gates A–F
+replay
 ```
 
-## Bondsmith engineer
+### Bondsmith engineer
 
 Owns:
 
 ```text
-/flysmith/v1/state
-/flysmith/v1/actions
-/flysmith/v1/advance
-fixture/reset support
+GET  /flysmith/v1/state
+POST /flysmith/v1/actions
+POST /flysmith/v1/advance
+stateVersion semantics
+idempotency
 allocation/maturity reconciliation
-adapter contract tests
+fixture reset
+adapter conformance tests
 ```
 
-## Experiment layer
+### Experiment engineer
 
 Owns:
 
 ```text
-normalization
-option construction
-liquidity-shock scenarios
+feature normalization
+scenario/liquidity shocks
 outcome attribution
-run manifests
-controls
-reports
+CLI orchestration
+JSONL/manifests
+control policies
+analysis/report generation
 ```
 
-These workstreams can proceed in parallel after the JSON schemas are committed.
+These teams can work in parallel once the schemas and in-memory adapter fixtures are in place.
 
 ---
 
-# 21. Controls required for any result
+## 19. Required controls
 
-Every reported training result must include, against the same environment history:
-
-- fixed-weight MaleCNS;
-- plastic MaleCNS + sham DAN;
-- trained plastic MaleCNS;
-- trained then efficacy-reset MaleCNS;
-- cue-unpaired DAN control;
-- PPL101-disabled negative-teaching control;
-- PAM02-disabled positive-teaching control;
-- MBON11 readout ablation/control;
-- MBON01 readout ablation/control;
-- alternate projection seed control;
-- random-choice policy;
-- highest-yield policy;
-- cash-only policy.
-
-Portfolio performance is secondary. The primary V1 result is successful, specific, reversible conditioned change in MBON value and resulting action selection.
-
----
-
-# 22. Implementation decisions that are closed
-
-The following are no longer open questions for V1:
+Any claimed learning result must run the identical financial history against:
 
 ```text
-connectome          MaleCNS male-cns:v1.0
-simulator baseline  DoomFly adaptive-centered-v6 @ 71ecf53d...
-graph scope         complete retained graph
-financial encoding  fixed sparse random KC code
-primary readout     MBON11 - MBON01 standardized valence
-negative teacher    PPL101
-positive teacher    PAM02
-plastic locus -     eligible KC -> MBON11
-plastic locus +     eligible KC -> MBON01
-plasticity          depression-only efficacy multiplier
-credit assignment   exact cue replay at outcome resolution
-position size       fixed external tranche
-clock                manual one-day advancement
-persistent memory    declared efficacy multipliers only
+fixed-weight MaleCNS
+plastic MaleCNS + sham DAN
+trained plastic MaleCNS
+trained then efficacy-reset MaleCNS
+cue-unpaired DAN control
+PPL101-disabled negative-teaching control
+PAM15-disabled positive-teaching control
+MBON11 readout ablation/control
+MBON01 readout ablation/control
+alternate projection-seed control
+random-choice policy
+highest-yield policy
+cash-only policy
 ```
 
-Remaining values such as selected KC/DAN current and final decoder normalization are **calibration outputs generated by the mandatory protocol**, not implementation choices left to individual engineers.
+Portfolio return is secondary. V1's primary scientific evidence is specific, signed and reversible conditioned change in neural value that changes a later action.
 
 ---
 
-# 23. References and provenance
+## 20. V1 acceptance criteria
 
-1. MaleCNS public neuPrint dataset `male-cns:v1.0`; natverse access tooling: https://natverse.org/malecns/
-2. DoomFly repository, pinned simulator/reference implementation: https://github.com/nftechie/doomfly/tree/71ecf53d78eaffaf1a57ed7b0ccf5d458abc9f33
-3. DoomFly `doom/prepare.py` at pinned commit: complete-edge CSR build and synaptic-weight/sign assumptions.
-4. DoomFly `doom_learning_v6/brain.py` and `kernel.cpp` at pinned commit: adaptive-centered-v6 dynamics and explicit current stimulation.
-5. Aso et al. (2014), *The neuronal architecture of the mushroom body provides a logic for associative learning*, eLife 3:e04577. https://doi.org/10.7554/eLife.04577
-6. Aso et al. (2014), *Mushroom body output neurons encode valence and guide memory-based action selection in Drosophila*, eLife 3:e04580. https://doi.org/10.7554/eLife.04580
-7. Owald et al. (2015), *Activity of Defined Mushroom Body Output Neurons Underlies Learned Olfactory Behavior in Drosophila*, Neuron 86:417–427. https://doi.org/10.1016/j.neuron.2015.03.025
-8. Takemura et al. (2017), *A connectome of a learning and memory center in the adult Drosophila brain*, eLife 6:e26975. https://doi.org/10.7554/eLife.26975
-9. Li et al. (2020), *The connectome of the adult Drosophila mushroom body provides insights into function*, eLife 9:e62576. https://doi.org/10.7554/eLife.62576
-10. Springer et al. (2021), dopamine/reward-encoding mechanisms in Drosophila mushroom-body compartments, Nature Communications 12:1115. https://doi.org/10.1038/s41467-021-21388-w
-11. Bondsmith developer portal: https://developers.bondsmith.com/
+The implementation is complete only when all are true:
 
-The numerical simulator, artificial financial encoding, current amplitudes and compressed short-term economy are model assumptions. MaleCNS supplies measured wiring; FlySmith does not represent the resulting LIF system as a validated living fly.
+1. Whole MaleCNS graph preparation matches pinned source/provenance and is hash-verified.
+2. Registry generation resolves every required population and both plastic edge sets without hand-copied IDs.
+3. The same financial feature vector always produces the same balanced bilateral KC cue and hash.
+4. Gates A–F pass and produce a calibration manifest tied to exact graph/registry/binary/config hashes.
+5. In-memory adapter passes the Bondsmith adapter contract tests.
+6. Local Bondsmith adapter passes those exact same black-box tests.
+7. A reset 30-day fixture replays with identical actions, MBON rates/scores and plasticity hashes on the same build/machine.
+8. Every required neural and non-neural control can run against the identical scenario history.
+9. Runtime assertions prevent modification of graph topology or structural weights.
+10. Every learned action change can be traced end-to-end:
+
+```text
+realized outcome
+→ stored cue
+→ explicit PAM15/PPL101 teaching
+→ registered efficacy changes
+→ changed later MBON score
+→ changed action
+```
+
+---
+
+## 21. Closed decisions
+
+No engineer should reopen these during V1 implementation without a design-version change:
+
+```text
+connectome           MaleCNS male-cns:v1.0
+numerical baseline   DoomFly adaptive-centered-v6 @ 71ecf53d...
+graph scope          full retained graph
+external input       constant-current injection
+financial encoding   deterministic 5% bilateral sparse KC code
+eligible KCs         KCs with retained edge to MBON01 or MBON11
+primary value        z(MBON11) - z(MBON01)
+negative teacher     PPL101
+positive teacher     PAM15 / PAM-γ5β′2a
+negative plasticity  KC → MBON11 depression
+positive plasticity  KC → MBON01 depression
+credit assignment    exact cue replay at outcome resolution
+position size        configured fixed tranche
+clock                 explicit one-day advance
+persistent memory    registered efficacy multipliers only
+```
+
+Selected KC current, teacher currents and MBON calibration statistics are outputs of the mandatory calibration protocol, not free implementation choices.
+
+---
+
+## 22. Sources
+
+- MaleCNS v1.0 downloads/data: https://male-cns.janelia.org/download/
+- DoomFly pinned reference: https://github.com/nftechie/doomfly/tree/71ecf53d78eaffaf1a57ed7b0ccf5d458abc9f33
+- Aso et al. 2014, mushroom-body architecture: https://doi.org/10.7554/eLife.04577
+- Aso et al. 2014, MBON valence/action selection: https://doi.org/10.7554/eLife.04580
+- Owald et al. 2015, defined MBONs and learned behavior: https://doi.org/10.1016/j.neuron.2015.03.025
+- Takemura et al. 2017, learning/memory connectome: https://doi.org/10.7554/eLife.26975
+- Li et al. 2020, adult mushroom-body connectome: https://doi.org/10.7554/eLife.62576
+- PAM15 ontology (`PAM-γ5β′2a`): FlyBase FBbt:00049841
+- PPL101 / PPL1-γ1pedc literature and MaleCNS annotation vocabulary
+- Bondsmith developer portal: https://developers.bondsmith.com/
+
+MaleCNS supplies measured anatomy/connectivity. The LIF dynamics, transmitter-sign conversion, artificial KC code, compressed financial outcomes and FlySmith plasticity rule are explicit modeling assumptions, not a validated physiological reconstruction of a living fly.

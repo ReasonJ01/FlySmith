@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flysmith.local/schemas/neuron-registry.schema.json",
+  "title": "FlySmith neuron registry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "dataset", "graph", "populations", "plasticEdges"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "dataset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "uuid", "sourceManifestSha256"],
+      "properties": {
+        "name": {"const": "male-cns:v1.0"},
+        "uuid": {"type": "string", "minLength": 1},
+        "sourceManifestSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "graph": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["neuronCount", "edgeCount", "idsSha256", "ptrSha256", "postSha256", "weightSha256"],
+      "properties": {
+        "neuronCount": {"type": "integer", "minimum": 1},
+        "edgeCount": {"type": "integer", "minimum": 1},
+        "idsSha256": {"$ref": "#/$defs/sha256"},
+        "ptrSha256": {"$ref": "#/$defs/sha256"},
+        "postSha256": {"$ref": "#/$defs/sha256"},
+        "weightSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "populations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kcEligible", "mbon11", "mbon01", "mbon02", "mbon03", "ppl101", "pam02", "pam01"],
+      "properties": {
+        "kcEligible": {"$ref": "#/$defs/selectedPopulation"},
+        "mbon11": {"$ref": "#/$defs/typedPopulation"},
+        "mbon01": {"$ref": "#/$defs/typedPopulation"},
+        "mbon02": {"$ref": "#/$defs/typedPopulation"},
+        "mbon03": {"$ref": "#/$defs/typedPopulation"},
+        "ppl101": {"$ref": "#/$defs/typedPopulation"},
+        "pam02": {"$ref": "#/$defs/typedPopulation"},
+        "pam01": {"$ref": "#/$defs/typedPopulation"}
+      }
+    },
+    "plasticEdges": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["negative", "positive"],
+      "properties": {
+        "negative": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/plasticEdge"}},
+        "positive": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/plasticEdge"}}
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "bodyIds": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "integer", "minimum": 1}},
+    "indices": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "integer", "minimum": 0}},
+    "typedPopulation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cellType", "bodyIds", "simulationIndices"],
+      "properties": {
+        "cellType": {"type": "string", "minLength": 1},
+        "bodyIds": {"$ref": "#/$defs/bodyIds"},
+        "simulationIndices": {"$ref": "#/$defs/indices"}
+      }
+    },
+    "selectedPopulation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["selector", "bodyIds", "simulationIndices"],
+      "properties": {
+        "selector": {"type": "string", "minLength": 1},
+        "bodyIds": {"$ref": "#/$defs/bodyIds"},
+        "simulationIndices": {"$ref": "#/$defs/indices"}
+      }
+    },
+    "plasticEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["preIndex", "postIndex", "edgeIndex", "structuralWeight"],
+      "properties": {
+        "preIndex": {"type": "integer", "minimum": 0},
+        "postIndex": {"type": "integer", "minimum": 0},
+        "edgeIndex": {"type": "integer", "minimum": 0},
+        "structuralWeight": {"type": "number"}
+      }
+    }
+  }
+}
